@@ -1,0 +1,42 @@
+# ─── Пути ───────────────────────────────────────────────
+paths:
+  input_pdf: "input/drawing.pdf"        # путь к чертежу
+  output_dir: "output"                   # куда сохранять КП
+  temp_dir: "temp"                       # временные PNG страниц
+
+# ─── Модель ─────────────────────────────────────────────
+model:
+  endpoint: "http://localhost:8000/predict"
+  timeout: 30                            # секунд
+  # Ожидаемый ответ от модели (JSON):
+  # {
+  #   "marks": [
+  #     {"mark": "Кр-1.01", "width_mm": 1390, "height_mm": 800, "count": 88},
+  #     {"mark": "Ксм-1.01", "width_mm": 1390, "height_mm": 610, "count": 32}
+  #   ]
+  # }
+
+# ─── Рендер PDF в PNG ────────────────────────────────────
+render:
+  dpi: 200                               # качество рендера страниц
+
+# ─── Материалы и цены ───────────────────────────────────
+materials:
+  - code: "KM1"
+    name: "Лабрадорит Volga Blue"
+    thickness_mm: 30
+    price_usd_per_m2: 219.0
+    supplier: "ООО Мармистика"
+    includes: "материал, пропилы под НФС, доставка до Москвы"
+    vat_pct: 22
+    lead_time: "2.5 месяца"
+    payment_terms: "70% предоплата, 30% после подписания УПД"
+
+# ─── КП ─────────────────────────────────────────────────
+quotation:
+  title: "Коммерческое предложение"
+  object: "ЖК «Остров 10», г. Москва"
+  prepared_by: "Pipeline v1"
+  currency_primary: "USD"
+  currency_secondary: "RUB"
+  # курс берётся автоматически с ЦБ РФ
