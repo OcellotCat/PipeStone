@@ -70,6 +70,61 @@ STONE_KEYWORD_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+STONE_SEMANTIC_THRESHOLD = 0.35
+_SEMANTIC_MODEL: Any = None
+
+
+def _load_semantic_model() -> Any | None:
+    global _SEMANTIC_MODEL
+    if _SEMANTIC_MODEL is not None:
+        return _SEMANTIC_MODEL
+    if not has_module("sentence_transformers"):
+        logger.warning(
+            "Semantic search unavailable: install sentence-transformers "
+            "(pip install sentence-transformers) and the model will be downloaded from HF Hub automatically."
+        )
+        return None
+    try:
+        from sentence_transformers import SentenceTransformer
+
+        logger.info("Downloading/loading semantic model: all-MiniLM-L6-v2 from HF Hub")
+        _SEMANTIC_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+        logger.info("Semantic model ready: all-MiniLM-L6-v2")
+        return _SEMANTIC_MODEL
+    except Exception as exc:
+        logger.warning("Semantic model download failed: %s", exc)
+        return None
+
+
+def semantic_best_stone_type(text: str, threshold: float = STONE_SEMANTIC_THRESHOLD) -> tuple[str | None, float]:
+    model = _load_semantic_model()
+    if model is None or not has_module("numpy"):
+        return None, 0.0
+    try:
+        import numpy as np
+
+        corpus = list(KNOWN_STONE_TYPES)
+        text_emb = model.encode(text, normalize_embeddings=True)
+        corpus_emb = model.encode(corpus, normalize_embeddings=True)
+        sims = (corpus_emb @ text_emb).tolist()
+        best_idx = int(np.argmax(sims))
+        best_score = float(sims[best_idx])
+        best_type = corpus[best_idx]
+        logger.debug(
+            "Semantic search for %r: best=%s score=%.4f threshold=%.2f",
+            text,
+            best_type,
+            best_score,
+            threshold,
+        )
+        if best_score >= threshold:
+            return best_type, best_score
+        return None, best_score
+    except Exception as exc:
+        logger.debug("Semantic match failed for %r: %s", text, exc)
+        return None, 0.0
+SEMANTIC_THRESHOLD = 0.35
+_E5_MODEL: Any = None
 KNOWN_STONE_TYPES = (
     "гранит",
     "мрамор",
@@ -85,6 +140,7 @@ KNOWN_STONE_TYPES = (
     "песчаник",
     "ракушечник",
     "серпентинит",
+    "натуральный камень",
 )
 BAD_DIMENSION_CONTEXT_RE = re.compile(
     r"(лист|дата|стадия|масштаб|гост|проверил|разраб|инв\.?|подп\.?|формат|"
@@ -173,6 +229,7 @@ def dependency_report() -> dict[str, bool]:
         "easyocr",
         "paddleocr",
         "PIL",
+        "sentence_transformers",
     ]
     return {name: has_module(name) for name in modules}
 
@@ -304,6 +361,7 @@ def collect_ocr_words(
     rendered_pages: list[RenderedPage],
     backend: str,
     force_ocr: bool,
+    tesseract_psm: int = 11,
 ) -> dict[int, list[OcrWord]]:
     text_words = extract_pdf_text_words(pdf_path, rendered_pages)
     words_by_page: dict[int, list[OcrWord]] = defaultdict(list)
@@ -319,7 +377,7 @@ def collect_ocr_words(
         if pdf_words:
             words_by_page[page.page].extend(pdf_words)
 
-        image_words, warning = run_image_ocr(page.image, page.page, backend)
+        image_words, warning = run_image_ocr(page.image, page.page, backend, tesseract_psm=tesseract_psm)
         if warning:
             warnings.append(f"page {page.page}: {warning}")
             logger.warning("Page %s OCR warning: %s", page.page, warning)
@@ -336,14 +394,14 @@ def collect_ocr_words(
     return dict(words_by_page)
 
 
-def run_image_ocr(image: Any, page_number: int, backend: str) -> tuple[list[OcrWord], str | None]:
+def run_image_ocr(image: Any, page_number: int, backend: str, tesseract_psm: int = 11) -> tuple[list[OcrWord], str | None]:
     backend = backend.lower()
     if backend == "none":
         return [], "image OCR disabled"
 
     if backend == "auto":
         for candidate in ("tesseract", "paddleocr", "easyocr"):
-            words, warning = run_image_ocr(image, page_number, candidate)
+            words, warning = run_image_ocr(image, page_number, candidate, tesseract_psm=tesseract_psm)
             if words:
                 return words, None
             if warning:
@@ -351,7 +409,7 @@ def run_image_ocr(image: Any, page_number: int, backend: str) -> tuple[list[OcrW
         return [], "no OCR backend produced text; install pytesseract/easyocr/paddleocr"
 
     if backend == "tesseract":
-        return run_tesseract_ocr(image, page_number)
+        return run_tesseract_ocr(image, page_number, tesseract_psm=tesseract_psm)
     if backend == "easyocr":
         return run_easyocr(image, page_number)
     if backend == "paddleocr":
@@ -359,7 +417,9 @@ def run_image_ocr(image: Any, page_number: int, backend: str) -> tuple[list[OcrW
     return [], f"unknown OCR backend: {backend}"
 
 
-def run_tesseract_ocr(image: Any, page_number: int) -> tuple[list[OcrWord], str | None]:
+def run_tesseract_ocr(
+    image: Any, page_number: int, tesseract_psm: int = 11
+) -> tuple[list[OcrWord], str | None]:
     if not has_module("pytesseract"):
         return [], "pytesseract is not installed"
     if not has_module("PIL"):
@@ -374,14 +434,14 @@ def run_tesseract_ocr(image: Any, page_number: int) -> tuple[list[OcrWord], str 
             data = pytesseract.image_to_data(
                 pil_image,
                 lang="rus+eng",
-                config="--oem 3 --psm 6",
+                config=f"--oem 3 --psm {tesseract_psm}",
                 output_type=pytesseract.Output.DICT,
             )
         except Exception:
             data = pytesseract.image_to_data(
                 pil_image,
                 lang="eng",
-                config="--oem 3 --psm 6",
+                config=f"--oem 3 --psm {tesseract_psm}",
                 output_type=pytesseract.Output.DICT,
             )
     except Exception as exc:
@@ -403,15 +463,15 @@ def run_tesseract_ocr(image: Any, page_number: int) -> tuple[list[OcrWord], str 
         y = float(data["top"][i])
         w = float(data["width"][i])
         h = float(data["height"][i])
-        words.append(
-            OcrWord(
-                page=page_number,
-                text=text,
-                bbox=(x, y, x + w, y + h),
-                confidence=confidence,
-                source="tesseract",
-            )
+        word = OcrWord(
+            page=page_number,
+            text=text,
+            bbox=(x, y, x + w, y + h),
+            confidence=confidence,
+            source="tesseract",
         )
+        words.append(word)
+        logger.debug("OCR word: page=%s text=%r conf=%s bbox=(%.1f,%.1f,%.1f,%.1f)", page_number, text, confidence, x, y, x + w, y + h)
     return words, None
 
 
@@ -439,14 +499,23 @@ def run_easyocr(image: Any, page_number: int) -> tuple[list[OcrWord], str | None
             continue
         xs = [float(point[0]) for point in box]
         ys = [float(point[1]) for point in box]
-        words.append(
-            OcrWord(
-                page=page_number,
-                text=text,
-                bbox=(min(xs), min(ys), max(xs), max(ys)),
-                confidence=float(confidence),
-                source="easyocr",
-            )
+        word = OcrWord(
+            page=page_number,
+            text=text,
+            bbox=(min(xs), min(ys), max(xs), max(ys)),
+            confidence=float(confidence),
+            source="easyocr",
+        )
+        words.append(word)
+        logger.debug(
+            "OCR word: page=%s text=%r conf=%.4f bbox=(%.1f,%.1f,%.1f,%.1f)",
+            page_number,
+            text,
+            float(confidence),
+            min(xs),
+            min(ys),
+            max(xs),
+            max(ys),
         )
     return words, None
 
@@ -481,14 +550,23 @@ def run_paddleocr(image: Any, page_number: int) -> tuple[list[OcrWord], str | No
                 continue
             xs = [float(point[0]) for point in box]
             ys = [float(point[1]) for point in box]
-            words.append(
-                OcrWord(
-                    page=page_number,
-                    text=text,
-                    bbox=(min(xs), min(ys), max(xs), max(ys)),
-                    confidence=confidence,
-                    source="paddleocr",
-                )
+            word = OcrWord(
+                page=page_number,
+                text=text,
+                bbox=(min(xs), min(ys), max(xs), max(ys)),
+                confidence=confidence,
+                source="paddleocr",
+            )
+            words.append(word)
+            logger.debug(
+                "OCR word: page=%s text=%r conf=%s bbox=(%.1f,%.1f,%.1f,%.1f)",
+                page_number,
+                text,
+                confidence,
+                min(xs),
+                min(ys),
+                max(xs),
+                max(ys),
             )
     return words, None
 
@@ -537,21 +615,65 @@ def guess_material_name(line_text: str) -> str:
     cleaned = line_text.strip(" :-\t")
 
     for stone_type in KNOWN_STONE_TYPES:
-        match = re.search(rf"\b{stone_type}\b.*", normalized, re.IGNORECASE)
+        match = re.search(rf"\b{stone_type}\b", normalized, re.IGNORECASE)
         if match:
             start = match.start()
-            return cleanup_material_label(cleaned[start:])
+            name = cleanup_material_label(cleaned[start:])
+            logger.info(
+                "Material guess via regex: type=%s name=%r source=%r",
+                stone_type,
+                name,
+                line_text,
+            )
+            return name
+
+    name = _guess_with_semantic_fallback(cleaned)
+    if name:
+        logger.info(
+            "Material guess via semantic search: name=%r source=%r",
+            name,
+            line_text,
+        )
+        return name
 
     after_colon = re.split(r"[:;-]", cleaned, maxsplit=1)
     if len(after_colon) == 2:
         candidate = cleanup_material_label(after_colon[1])
         if candidate and normalize_text(candidate) not in {"30 мм", "мм"}:
+            logger.info(
+                "Material guess via colon fallback: candidate=%r source=%r",
+                candidate,
+                line_text,
+            )
             return candidate
 
     candidate = cleanup_material_label(cleaned)
-    if len(candidate) >= 8 and len(candidate.split()) <= 12:
+    if 8 <= len(candidate) <= 12 * len(candidate.split()):
+        logger.info(
+            "Material guess via cleaned fallback: candidate=%r source=%r",
+            candidate,
+            line_text,
+        )
         return candidate
+
+    logger.info("Material guess default: source=%r", line_text)
     return "Натуральный камень"
+
+
+def _guess_with_semantic_fallback(text: str) -> str | None:
+    stone_type, score = semantic_best_stone_type(text)
+    if stone_type is None:
+        return None
+    logger.info(
+        "Semantic stone match confirmed: type=%s score=%.4f threshold=%.2f",
+        stone_type,
+        score,
+        STONE_SEMANTIC_THRESHOLD,
+    )
+    match = re.search(rf"\b{stone_type}\b", text, re.IGNORECASE)
+    if match:
+        return cleanup_material_label(text[match.start():])
+    return stone_type
 
 
 def cleanup_material_label(label: str) -> str:
@@ -578,28 +700,62 @@ def extract_material_mentions(words_by_page: dict[int, list[OcrWord]]) -> list[M
         for line in words_to_lines(words):
             normalized = normalize_text(line.text)
             match = STONE_KEYWORD_RE.search(normalized)
+            keyword = match.group(0) if match else None
             if not match:
-                continue
-            material_name = guess_material_name(line.text)
+                stone_type, score = semantic_best_stone_type(normalized)
+                if stone_type is None or score < STONE_SEMANTIC_THRESHOLD:
+                    continue
+                match = re.search(rf"\b{stone_type}\b", normalized, re.IGNORECASE)
+                if not match:
+                    continue
+                keyword = match.group(0)
+            matched_text = line.text
+            material_name = guess_material_name(matched_text)
             key = (
                 page,
                 normalize_text(material_name),
                 tuple(int(round(value / 10.0)) for value in line.bbox),
             )
             if key in seen:
+                logger.debug(
+                    "Duplicate mention skipped: page=%s material=%r line=%r",
+                    page,
+                    material_name,
+                    matched_text,
+                )
                 continue
             seen.add(key)
             mentions.append(
                 MaterialMention(
                     page=page,
                     material_name=material_name,
-                    line_text=line.text,
-                    keyword=match.group(0),
+                    line_text=matched_text,
+                    keyword=keyword,
                     bbox=line.bbox,
                     confidence=line.confidence,
                     source=line.source,
                 )
             )
+            logger.info(
+                "Extracted material mention: page=%s material=%r keyword=%r confidence=%s source=%s",
+                page,
+                material_name,
+                keyword,
+                line.confidence,
+                line.source,
+            )
+
+    if mentions:
+        logger.info(
+            "Material extraction complete: found %s mentions across %s pages",
+            len(mentions),
+            len({m.page for m in mentions}),
+        )
+    else:
+        logger.warning(
+            "Material extraction complete: no mentions found. "
+            "Check OCR output or increase --force-ocr / --ocr-backend auto."
+        )
     return mentions
 
 
@@ -1025,6 +1181,7 @@ def analyze_pdf_file(
     fallback_mm_per_px: float | None = None,
     min_zone_area_px: int | None = None,
     save_csv: bool = True,
+    tesseract_psm: int = 11,
 ) -> dict[str, Any]:
     pdf_path = Path(pdf_path)
     if not pdf_path.exists():
@@ -1038,8 +1195,10 @@ def analyze_pdf_file(
 
     logger.info("Starting PDF analysis: file=%s run=%s", pdf_path, run_id)
     rendered_pages = render_pdf_pages(pdf_path, dpi=dpi)
-    words_by_page = collect_ocr_words(pdf_path, rendered_pages, backend=ocr_backend, force_ocr=force_ocr)
+    words_by_page = collect_ocr_words(pdf_path, rendered_pages, backend=ocr_backend, force_ocr=force_ocr, tesseract_psm=tesseract_psm)
     mentions = extract_material_mentions(words_by_page)
+    lines_by_page = {page: words_to_lines(words) for page, words in words_by_page.items()}
+    ocr_debug_path = write_ocr_debug(run_dir, words_by_page, lines_by_page)
 
     warnings: list[str] = []
     if mentions:
@@ -1137,9 +1296,39 @@ def analyze_pdf_file(
         "summary": summary,
         "panels": panels,
         "csv_path": str(csv_path) if csv_path else None,
+        "ocr_debug_path": str(ocr_debug_path) if ocr_debug_path else None,
     }
     log_analysis_result(result)
     return result
+
+
+def write_ocr_debug(run_dir: Path, words_by_page: dict[int, list[OcrWord]], lines_by_page: dict[int, list[OcrLine]]) -> Path | None:
+    if not words_by_page:
+        return None
+    path = run_dir / "paper-ocr.dat"
+    with path.open("w", encoding="utf-8") as file:
+        file.write(f"# OCR debug output\n")
+        file.write(f"# pages: {len(words_by_page)}\n\n")
+        for page in sorted(words_by_page):
+            file.write(f"=== PAGE {page} ===\n")
+            file.write(f"# words: {len(words_by_page[page])}\n")
+            for word in sorted(words_by_page[page], key=lambda w: (w.bbox[1], w.bbox[0])):
+                file.write(
+                    f"W\t{word.text}\t{word.bbox[0]:.2f}\t{word.bbox[1]:.2f}\t"
+                    f"{word.bbox[2]:.2f}\t{word.bbox[3]:.2f}\t"
+                    f"{word.confidence if word.confidence is not None else -1:.4f}\t{word.source}\n"
+                )
+            file.write("\n")
+            page_lines = lines_by_page.get(page, [])
+            file.write(f"# lines: {len(page_lines)}\n")
+            for line in page_lines:
+                file.write(
+                    f"L\t{line.text}\t{line.bbox[0]:.2f}\t{line.bbox[1]:.2f}\t"
+                    f"{line.bbox[2]:.2f}\t{line.bbox[3]:.2f}\t"
+                    f"{line.confidence if line.confidence is not None else -1:.4f}\t{line.source}\n"
+                )
+            file.write("\n")
+    return path
 
 
 def write_csv(run_dir: Path, panels: list[dict[str, Any]], summary: list[dict[str, Any]]) -> Path:
@@ -1295,11 +1484,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     serve = subparsers.add_parser("serve", help="start FastAPI server")
+    serve.add_argument("--verbose", action="store_true", help="verbose logs")
     serve.add_argument("--host", default="0.0.0.0")
     serve.add_argument("--port", type=int, default=8000)
     serve.add_argument("--reload", action="store_true")
 
     analyze = subparsers.add_parser("analyze", help="analyze one local PDF")
+    analyze.add_argument("--verbose", action="store_true", help="verbose logs")
     analyze.add_argument("--pdf", required=True)
     analyze.add_argument("--dpi", type=int, default=DEFAULT_DPI)
     analyze.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
@@ -1313,6 +1504,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--min-zone-area-px", type=int, default=None)
     analyze.add_argument("--no-csv", action="store_true")
     analyze.add_argument("--json", action="store_true", help="print full JSON result")
+    analyze.add_argument(
+        "--tesseract-psm",
+        type=int,
+        default=11,
+        choices=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        help="Tesseract page segmentation mode (11 = sparse text, good for drawings)",
+    )
 
     subparsers.add_parser("doctor", help="show dependency status")
     return parser
@@ -1358,6 +1556,7 @@ def main(argv: list[str] | None = None) -> int:
             fallback_mm_per_px=args.fallback_mm_per_px,
             min_zone_area_px=args.min_zone_area_px,
             save_csv=not args.no_csv,
+            tesseract_psm=args.tesseract_psm,
         )
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2))
