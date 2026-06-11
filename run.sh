@@ -3,7 +3,7 @@
 set -e
 
 VENV_DIR=".venv"
-REQUIREMENTS="pdf2image requests pyyaml reportlab"
+REQUIREMENTS="fastapi uvicorn python-multipart pymupdf numpy opencv-python-headless"
 
 # Создаём venv если нет
 if [ ! -d "$VENV_DIR" ]; then
@@ -17,5 +17,9 @@ source "$VENV_DIR/bin/activate"
 # Устанавливаем зависимости если нужно
 pip install --quiet $REQUIREMENTS
 
-# Запуск (можно передать аргументы: ./run.sh --pdf other.pdf)
+# Запуск API по умолчанию.
+# Примеры:
+#   ./run.sh
+#   ./run.sh serve --host 127.0.0.1 --port 8000
+#   ./run.sh analyze --pdf input/drawing.pdf --fallback-mm-per-px 2.5
 python pipeline.py "$@"
