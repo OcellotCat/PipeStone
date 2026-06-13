@@ -188,6 +188,28 @@ def dedupe_material_names(mentions: list[MaterialMention]) -> list[str]:
     return names
 
 
+def matches_material_query(panel: dict[str, Any], target_material: str) -> bool:
+    query = normalize_text(target_material)
+    if not query:
+        return False
+
+    values = [
+        str(panel.get("material_name") or ""),
+        str(panel.get("material_keyword") or ""),
+        str(panel.get("material_line") or ""),
+    ]
+    for value in values:
+        normalized_value = normalize_text(value)
+        if query in normalized_value:
+            return True
+
+    query_tokens = {token for token in query.split() if len(token) > 2}
+    if not query_tokens:
+        return False
+
+    return any(query_tokens.issubset(set(normalize_text(value).split())) for value in values)
+
+
 def assign_material(zone: dict[str, Any], page_mentions: list[MaterialMention], all_mentions: list[MaterialMention]) -> MaterialMention | None:
     if page_mentions:
         if len(page_mentions) == 1:
@@ -372,6 +394,7 @@ def analyze_pdf_file(
     min_zone_area_px: int | None = None,
     save_csv: bool = True,
     tesseract_psm: int = 11,
+    target_material: str | None = None,
 ) -> dict[str, Any]:
     import re
     pdf_path = Path(pdf_path)
@@ -400,6 +423,7 @@ def analyze_pdf_file(
 
     single_global_material = len(dedupe_material_names(mentions)) == 1
     panels: list[dict[str, Any]] = []
+    target_material_query = normalize_text(target_material or "")
 
     for page in rendered_pages:
         page_mentions = mentions_by_page.get(page["page"], [])
@@ -441,6 +465,29 @@ def analyze_pdf_file(
             })
             panels.append(panel)
 
+        if target_material_query:
+            matched_on_page = sum(
+                1
+                for panel in panels
+                if panel.get("page") == page["page"] and matches_material_query(panel, target_material_query)
+            )
+            logger.info(
+                "Page %s target markup zones: matched=%s total_zones=%s query=%r",
+                page["page"],
+                matched_on_page,
+                len(zones),
+                target_material_query,
+            )
+
+    matched_panels = [panel for panel in panels if matches_material_query(panel, target_material_query)] if target_material_query else []
+    if target_material_query:
+        logger.info(
+            "Target markup zones total: matched=%s total_zones=%s query=%r",
+            len(matched_panels),
+            len(panels),
+            target_material_query,
+        )
+
     summary = summarize_panels(panels)
     write_csv(run_dir, panels, summary)
 
@@ -451,6 +498,8 @@ def analyze_pdf_file(
         "warnings": warnings,
         "summary": summary,
         "panels": panels,
+        "target_material": target_material or None,
+        "target_material_zone_count": len(matched_panels) if target_material_query else None,
     }
 
 
@@ -462,11 +511,12 @@ if __name__ == "__main__":
     parser.add_argument("--ocr-backend", default="auto")
     parser.add_argument("--force-ocr", action="store_true")
     parser.add_argument("--fallback-mm-per-px", type=float, default=None)
+    parser.add_argument("--target-material", default=None)
     parser.add_argument("--json", action="store_true")
 
     args = parser.parse_args()
     setup_logging()
-    result = analyze_pdf_file(args.pdf, ocr_backend=args.ocr_backend, fallback_mm_per_px=args.fallback_mm_per_px, force_ocr=args.force_ocr)
+    result = analyze_pdf_file(args.pdf, ocr_backend=args.ocr_backend, fallback_mm_per_px=args.fallback_mm_per_px, force_ocr=args.force_ocr, target_material=args.target_material)
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
 
@@ -488,14 +538,14 @@ def create_app():
         }}
 
     @api.post("/analyze-pdf")
-    async def analyze(pdf: UploadFile = File(...), ocr_backend: str = "auto", fallback_mm_per_px: float = None):
+    async def analyze(pdf: UploadFile = File(...), ocr_backend: str = "auto", fallback_mm_per_px: float = None, target_material: str | None = Query(None)):
         import tempfile, shutil
         temp_dir = Path(tempfile.mkdtemp(prefix="pipestone_"))
         try:
             temp_path = temp_dir / "upload.pdf"
             content = await pdf.read()
             temp_path.write_bytes(content)
-            return analyze_pdf_file(str(temp_path), ocr_backend=ocr_backend, fallback_mm_per_px=fallback_mm_per_px)
+            return analyze_pdf_file(str(temp_path), ocr_backend=ocr_backend, fallback_mm_per_px=fallback_mm_per_px, target_material=target_material)
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 

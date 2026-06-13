@@ -6,10 +6,10 @@ from __future__ import annotations
 import importlib.util
 import logging
 import math
-from collections import defaultdict
-from dataclasses import dataclass
 from statistics import median
 from typing import Any
+
+import numpy as np
 
 logger = logging.getLogger("pipestone.cv")
 
@@ -150,7 +150,9 @@ def detect_material_zones(
         if len(approx) < 4:
             continue
 
-        mean_intensity = float(cv2.mean(gray, mask=contour)[0])
+        mask = np.zeros_like(gray)
+        cv2.drawContours(mask, [contour], -1, 255, thickness=cv2.FILLED)
+        mean_intensity = float(cv2.mean(gray, mask=mask)[0])
 
         zones.append(
             {
