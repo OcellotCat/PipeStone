@@ -9,7 +9,6 @@ __all__ = ["analyze_pdf_file", "setup_logging", "APP_NAME", "DEFAULT_DPI", "DEFA
 if __name__ == "__main__":
     import argparse
     import json
-    from pathlib import Path
 
     parser = argparse.ArgumentParser(description=APP_NAME)
     parser.add_argument("--pdf", required=False)
@@ -18,7 +17,6 @@ if __name__ == "__main__":
     parser.add_argument("--ocr-backend", default="auto")
     parser.add_argument("--force-ocr", action="store_true")
     parser.add_argument("--fallback-mm-per-px", type=float, default=None)
-    parser.add_argument("--target-material", default=None)
     parser.add_argument("--json", action="store_true")
 
     args = parser.parse_args()
@@ -34,7 +32,6 @@ if __name__ == "__main__":
         ocr_backend=args.ocr_backend,
         force_ocr=args.force_ocr,
         fallback_mm_per_px=args.fallback_mm_per_px,
-        target_material=args.target_material,
     )
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))

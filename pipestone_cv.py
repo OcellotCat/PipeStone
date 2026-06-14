@@ -89,6 +89,295 @@ def detect_line_segments(image: Any) -> list[dict[str, Any]]:
     return segments
 
 
+def _require_cv2_np() -> tuple[Any, Any]:
+    return require_module("cv2", "pip install opencv-python-headless"), require_module("numpy", "pip install numpy")
+
+
+def _rgb_array(image: Any) -> Any:
+    cv2, np = _require_cv2_np()
+    array = np.array(image)
+    if array.ndim == 2:
+        return cv2.cvtColor(array, cv2.COLOR_GRAY2RGB)
+    if array.shape[2] == 4:
+        return cv2.cvtColor(array, cv2.COLOR_RGBA2RGB)
+    return array[:, :, :3].astype(np.uint8)
+
+
+def _normalize_angle_deg(angle: float) -> float:
+    angle = float(angle) % 180.0
+    if angle > 90.0:
+        angle -= 180.0
+    return angle
+
+
+def _angle_distance_deg(a: float | None, b: float | None) -> float | None:
+    if a is None or b is None:
+        return None
+    diff = abs(float(a) - float(b)) % 180.0
+    return min(diff, 180.0 - diff)
+
+
+def _detect_hatch_angles(line_mask: Any, min_line_length: int | None = None) -> tuple[list[float], list[float]]:
+    cv2, np = _require_cv2_np()
+    height, width = line_mask.shape[:2]
+    min_len = min_line_length or max(12, int(min(height, width) * 0.08))
+    raw_lines = cv2.HoughLinesP(
+        line_mask,
+        rho=1,
+        theta=np.pi / 180,
+        threshold=max(12, int(min_len * 0.45)),
+        minLineLength=max(8, int(min_len * 0.65)),
+        maxLineGap=max(3, int(min_len * 0.15)),
+    )
+    if raw_lines is None:
+        return [], []
+
+    angles: list[float] = []
+    lengths: list[float] = []
+    for raw in raw_lines[:, 0, :]:
+        x1, y1, x2, y2 = [float(value) for value in raw]
+        length = math.hypot(x2 - x1, y2 - y1)
+        if length < max(8, min_len * 0.5):
+            continue
+        angles.append(_normalize_angle_deg(math.degrees(math.atan2(y2 - y1, x2 - x1))))
+        lengths.append(length)
+    return angles, lengths
+
+
+def _estimate_hatch_spacing(line_mask: Any, mask: Any, angle_deg: float | None) -> tuple[float | None, float | None]:
+    cv2, np = _require_cv2_np()
+    height, width = line_mask.shape[:2]
+    if np.count_nonzero(mask) < 10 or np.count_nonzero(line_mask) < 10:
+        return None, None
+
+    angle = 0.0 if angle_deg is None else float(angle_deg)
+    center = (width / 2.0, height / 2.0)
+    matrix = cv2.getRotationMatrix2D(center, -angle, 1.0)
+    rotated_lines = cv2.warpAffine(line_mask, matrix, (width, height), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    rotated_mask = cv2.warpAffine(mask, matrix, (width, height), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+
+    projection = cv2.reduce(rotated_lines, 1, cv2.REDUCE_SUM, dtype=cv2.CV_32F).ravel()
+    weights = cv2.reduce(rotated_mask, 1, cv2.REDUCE_SUM, dtype=cv2.CV_32F).ravel()
+    valid = weights > max(1.0, width * 0.15)
+    if int(np.count_nonzero(valid)) < 2:
+        return None, None
+
+    density = projection / np.maximum(weights, 1.0)
+    threshold = max(float(np.percentile(density[valid], 55)), 0.025)
+    rows = np.flatnonzero(valid & (density >= threshold))
+    if rows.size < 2:
+        return None, None
+
+    groups: list[tuple[int, int]] = []
+    start = prev = int(rows[0])
+    for row in rows[1:]:
+        row = int(row)
+        if row <= prev + 2:
+            prev = row
+            continue
+        groups.append((start, prev))
+        start = prev = row
+    groups.append((start, prev))
+
+    centers = [(start + end) / 2.0 for start, end in groups if end - start >= 1]
+    thicknesses = [end - start + 1 for start, end in groups if end - start >= 1]
+    if len(centers) < 2 or not thicknesses:
+        return None, None
+
+    spacing = float(median(np.diff(centers)))
+    thickness = float(median(thicknesses))
+    if spacing <= 1.0 or thickness <= 0.0:
+        return None, None
+    return spacing, thickness
+
+
+def extract_pattern_descriptor(
+    image: Any,
+    bbox: tuple[float, float, float, float] | list[float] | None = None,
+    mask: Any | None = None,
+) -> dict[str, Any]:
+    cv2, np = _require_cv2_np()
+    rgb = _rgb_array(image)
+
+    if bbox is not None:
+        x0, y0, x1, y1 = [int(round(value)) for value in bbox]
+        height, width = rgb.shape[:2]
+        x0 = max(0, min(x0, width - 1))
+        y0 = max(0, min(y0, height - 1))
+        x1 = max(0, min(x1, width - 1))
+        y1 = max(0, min(y1, height - 1))
+        crop = rgb[y0:y1, x0:x1]
+        crop_mask = mask[y0:y1, x0:x1] if mask is not None else None
+    else:
+        crop = rgb
+        crop_mask = mask
+
+    if crop.size == 0:
+        return {
+            "mean_color": [None, None, None],
+            "color": [None, None, None],
+            "hatch_angle": None,
+            "hatch_spacing_px": None,
+            "hatch_line_thickness_px": None,
+            "texture": {"fill_ratio": None, "edge_density": None, "contrast": None, "color_std": [None, None, None]},
+        }
+
+    if bbox is not None and crop.shape[0] > 8 and crop.shape[1] > 8:
+        margin = max(2, int(min(crop.shape[:2]) * 0.04))
+        crop = crop[margin:-margin, margin:-margin]
+        if crop_mask is not None:
+            crop_mask = crop_mask[margin:-margin, margin:-margin]
+
+    if crop.size == 0:
+        return {
+            "mean_color": [None, None, None],
+            "color": [None, None, None],
+            "hatch_angle": None,
+            "hatch_spacing_px": None,
+            "hatch_line_thickness_px": None,
+            "texture": {"fill_ratio": None, "edge_density": None, "contrast": None, "color_std": [None, None, None]},
+        }
+
+    if crop_mask is None:
+        crop_mask = np.full(crop.shape[:2], 255, dtype=np.uint8)
+    else:
+        crop_mask = (np.asarray(crop_mask) > 0).astype(np.uint8) * 255
+
+    gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
+    mean_color = [round(float(value), 1) for value in cv2.mean(crop, mask=crop_mask)[:3]]
+    color_std = [round(float(value), 1) for value in cv2.meanStdDev(crop, mask=crop_mask)[1].ravel()]
+    _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    edges = cv2.Canny(gray, 50, 150)
+    line_mask = cv2.bitwise_or(otsu, edges)
+    line_mask = cv2.bitwise_and(line_mask, line_mask, mask=crop_mask)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    line_mask = cv2.morphologyEx(line_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+
+    mask_area = max(float(np.count_nonzero(crop_mask)), 1.0)
+    line_pixels = float(np.count_nonzero(line_mask))
+    edge_pixels = float(np.count_nonzero(cv2.bitwise_and(edges, edges, mask=crop_mask)))
+    line_density = line_pixels / mask_area
+    edge_density = edge_pixels / mask_area
+    contrast_values = gray[crop_mask > 0]
+    contrast = float(np.std(contrast_values)) if contrast_values.size else 0.0
+
+    angles, angle_lengths = _detect_hatch_angles(line_mask)
+    angle = None
+    if angles:
+        bins: dict[float, float] = {}
+        for angle_value, length in zip(angles, angle_lengths):
+            key = round(angle_value / 5.0) * 5.0
+            bins[key] = bins.get(key, 0.0) + length
+        best_bin = max(bins.items(), key=lambda item: item[1])[0]
+        near = [angle_value for angle_value in angles if abs(angle_value - best_bin) <= 7.5]
+        angle = float(median(near or angles))
+
+    spacing, thickness = _estimate_hatch_spacing(line_mask, crop_mask, angle)
+
+    return {
+        "mean_color": mean_color,
+        "color": mean_color,
+        "hatch_angle": round(angle, 2) if angle is not None else None,
+        "hatch_spacing_px": round(float(spacing), 2) if spacing is not None else None,
+        "hatch_line_thickness_px": round(float(thickness), 2) if thickness is not None else None,
+        "texture": {
+            "fill_ratio": round(line_density, 4),
+            "edge_density": round(edge_density, 4),
+            "contrast": round(contrast, 2),
+            "color_std": color_std,
+        },
+    }
+
+
+def pattern_distance(zone_descriptor: dict[str, Any], pattern_descriptor: dict[str, Any]) -> float:
+    if not zone_descriptor or not pattern_descriptor:
+        return float("inf")
+
+    def relative_score(a: float | None, b: float | None, tolerance: float) -> float | None:
+        if a is None or b is None:
+            return None
+        return min(abs(float(a) - float(b)) / max(abs(float(b)), tolerance, 1.0e-6), 2.0)
+
+    zone_color = zone_descriptor.get("mean_color") or zone_descriptor.get("color") or []
+    pattern_color = pattern_descriptor.get("mean_color") or pattern_descriptor.get("color") or []
+    color_score = None
+    if len(zone_color) >= 3 and len(pattern_color) >= 3 and all(value is not None for value in zone_color[:3] + pattern_color[:3]):
+        diff = math.sqrt(sum((float(zone_color[i]) - float(pattern_color[i])) ** 2 for i in range(3)))
+        color_score = min(diff / 255.0, 2.0)
+
+    angle_score = None
+    zone_angle = zone_descriptor.get("hatch_angle")
+    pattern_angle = pattern_descriptor.get("hatch_angle")
+    angle_diff = _angle_distance_deg(zone_angle, pattern_angle)
+    if angle_diff is not None:
+        angle_score = min(angle_diff / 45.0, 2.0)
+
+    spacing_score = relative_score(zone_descriptor.get("hatch_spacing_px"), pattern_descriptor.get("hatch_spacing_px"), 4.0)
+    thickness_score = relative_score(zone_descriptor.get("hatch_line_thickness_px"), pattern_descriptor.get("hatch_line_thickness_px"), 1.0)
+
+    zone_texture = zone_descriptor.get("texture") or {}
+    pattern_texture = pattern_descriptor.get("texture") or {}
+    texture_scores = [
+        relative_score(zone_texture.get("fill_ratio"), pattern_texture.get("fill_ratio"), 0.03),
+        relative_score(zone_texture.get("edge_density"), pattern_texture.get("edge_density"), 0.01),
+        relative_score(zone_texture.get("contrast"), pattern_texture.get("contrast"), 8.0),
+    ]
+    texture_score_values = [score for score in texture_scores if score is not None]
+    texture_score = sum(texture_score_values) / len(texture_score_values) if texture_score_values else None
+
+    weighted_scores = [
+        (0.25, color_score),
+        (0.25, angle_score),
+        (0.20, spacing_score),
+        (0.10, thickness_score),
+        (0.20, texture_score),
+    ]
+    selected = [(weight, score) for weight, score in weighted_scores if score is not None]
+    if not selected:
+        return float("inf")
+
+    total_weight = sum(weight for weight, _ in selected)
+    return sum(weight * float(score) for weight, score in selected) / total_weight
+
+
+def match_zones_to_patterns(
+    zones: list[dict[str, Any]],
+    patterns: list[dict[str, Any]],
+    image: Any,
+    max_score: float = 1.35,
+) -> list[dict[str, Any]]:
+    if not patterns:
+        return []
+
+    source_zone_ids = {str(pattern.get("zone_id")) for pattern in patterns if pattern.get("zone_id") is not None}
+    matched: list[dict[str, Any]] = []
+
+    for zone in zones:
+        if str(zone.get("zone_id")) in source_zone_ids:
+            continue
+        descriptor = extract_pattern_descriptor(image, bbox=zone["bbox_px"])
+        best_pattern = None
+        best_score = float("inf")
+        for pattern in patterns:
+            score = pattern_distance(descriptor, pattern.get("pattern") or {})
+            if score < best_score:
+                best_score = score
+                best_pattern = pattern
+        if best_pattern is None or best_score > max_score:
+            continue
+        matched.append(
+            {
+                **zone,
+                "pattern_id": best_pattern.get("id"),
+                "pattern_name": best_pattern.get("name"),
+                "pattern_score": round(float(best_score), 4),
+                "pattern_descriptor": descriptor,
+                "matched_pattern": best_pattern,
+            }
+        )
+    return matched
+
+
 def detect_material_zones(
     image: Any,
     page_number: int,
@@ -125,7 +414,7 @@ def detect_material_zones(
     )
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
-    contours, _ = cv2.findContours(closed, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     zones: list[dict[str, Any]] = []
     for contour in contours:
