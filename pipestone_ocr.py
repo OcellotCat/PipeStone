@@ -601,24 +601,3 @@ def add_metric_fields(zone: dict[str, Any], mm_per_px: float | None, scale_sourc
         }
     )
     return result
-
-
-def summarize_panels(panels: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for panel in panels:
-        grouped[panel["material_name"]].append(panel)
-
-    summary: list[dict[str, Any]] = []
-    for material_name, rows in sorted(grouped.items(), key=lambda item: item[0].lower()):
-        areas = [row["area_m2"] for row in rows if row.get("area_m2") is not None]
-        bbox_areas = [row["bbox_area_m2"] for row in rows if row.get("bbox_area_m2") is not None]
-        summary.append(
-            {
-                "material_name": material_name,
-                "panel_count": len(rows),
-                "area_m2": round(sum(areas), 4) if areas else None,
-                "bbox_area_m2": round(sum(bbox_areas), 4) if bbox_areas else None,
-                "pages": sorted({row["page"] for row in rows}),
-            }
-        )
-    return summary

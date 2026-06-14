@@ -17,11 +17,7 @@ from typing import Any
 from pipestone_cv import (
     bbox_center,
     detect_line_segments,
-    detect_material_zones,
-    estimate_zone_scale,
     extract_pattern_descriptor,
-    filter_zones_by_hatch_pattern,
-    match_zones_to_patterns,
     require_module,
 )
 from pipestone_ocr import (
@@ -29,7 +25,6 @@ from pipestone_ocr import (
     bbox_union,
     collect_ocr_words,
     render_pdf_pages,
-    summarize_panels,
     words_to_lines,
 )
 from pipeline_material_search import (
@@ -42,7 +37,7 @@ from pipeline_material_search import (
 logger = logging.getLogger("pipestone")
 
 APP_NAME = "PipeStone PDF Stone Area MVP"
-DEFAULT_DPI = 220
+DEFAULT_DPI = 400
 DEFAULT_OUTPUT_DIR = "output"
 
 
@@ -352,144 +347,6 @@ def match_patterns_to_mentions(
             matched_pattern_ids.add(best_pattern["id"])
     return matches_by_mention_index, matched_pattern_ids
 
-
-def save_mention_debug_images(
-    rendered_pages: list[dict[str, Any]],
-    mentions: list[MaterialMention],
-    run_dir: Path,
-    words_by_page: dict[int, list[OcrWord]] | None = None,
-    all_zones_by_page: dict[int, list[dict[str, Any]]] | None = None,
-    min_zone_area_px: int | None = None,
-) -> dict[str, Any]:
-    cv2 = require_module("cv2", "pip install opencv-python-headless")
-    np = require_module("numpy", "pip install numpy")
-
-    mentions_by_page: dict[int, list[MaterialMention]] = defaultdict(list)
-    for mention in mentions:
-        mentions_by_page[mention.page].append(mention)
-
-    debug_dir = run_dir / "mentions_debug"
-    debug_dir.mkdir(parents=True, exist_ok=True)
-
-    saved_images: list[str] = []
-    saved_mentions: list[dict[str, Any]] = []
-    saved_patterns: list[dict[str, Any]] = []
-
-    for page in rendered_pages:
-        page_number = page["page"]
-        page_mentions = mentions_by_page.get(page_number, [])
-        if not page_mentions:
-            continue
-
-        height_px, width_px = page["image"].shape[:2]
-        debug = np.array(page["image"], copy=True)
-        thickness = max(2, min(width_px, height_px) // 500)
-
-        for index, mention in enumerate(page_mentions, start=1):
-            x0, y0, x1, y1 = [int(round(value)) for value in mention.bbox]
-            x0 = max(0, min(x0, width_px - 1))
-            y0 = max(0, min(y0, height_px - 1))
-            x1 = max(0, min(x1, width_px - 1))
-            y1 = max(0, min(y1, height_px - 1))
-
-            color = (255, 0, 0)
-            cv2.rectangle(debug, (x0, y0), (x1, y1), color, thickness, cv2.LINE_AA)
-            cv2.putText(debug, f"M{index}", (x0, max(14, y0 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, thickness + 1, cv2.LINE_AA)
-
-        page_words = words_by_page.get(page_number, []) if words_by_page else []
-        all_zones = (all_zones_by_page or {}).get(page_number)
-        if all_zones is None and page_words:
-            all_zones = detect_material_zones(
-                page["image"],
-                page_number,
-                min_zone_area_px=min_zone_area_px,
-                ignore_bboxes=[word.bbox for word in page_words],
-            )
-        page_patterns = (
-            extract_pattern_legends_for_page(
-                page["image"],
-                page_number,
-                page_mentions,
-                all_zones or [],
-                width_px,
-                height_px,
-                page_words,
-            )
-            if all_zones
-            else []
-        )
-        legend_matches, matched_pattern_ids = match_patterns_to_mentions(page_patterns, page_mentions)
-        pattern_index_by_id = {pattern["id"]: index for index, pattern in enumerate(page_patterns, start=1)}
-        pattern_labels: dict[str, list[str]] = defaultdict(list)
-        for mention_index, match in legend_matches.items():
-            pattern_labels[match["pattern"]["id"]].append(f"M{mention_index}")
-
-        for pattern_index, pattern in enumerate(page_patterns, start=1):
-            if pattern["id"] not in matched_pattern_ids:
-                continue
-            x0, y0, x1, y1 = [int(round(value)) for value in pattern["bbox"]]
-            x0 = max(0, min(x0, width_px - 1))
-            y0 = max(0, min(y0, height_px - 1))
-            x1 = max(0, min(x1, width_px - 1))
-            y1 = max(0, min(y1, height_px - 1))
-            color = (0, 180, 255)
-            cv2.rectangle(debug, (x0, y0), (x1, y1), color, thickness + 2, cv2.LINE_AA)
-            cv2.putText(debug, ",".join(pattern_labels[pattern["id"]]), (x0, max(14, y0 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, thickness + 2, cv2.LINE_AA)
-            saved_patterns.append(
-                {
-                    "image": "",
-                    "legend_index": f"L{pattern_index}",
-                    "page": page_number,
-                    "pattern_id": pattern["id"],
-                    "name": pattern["name"],
-                    "bbox": [x0, y0, x1, y1],
-                    "legend_bbox": pattern.get("legend_bbox"),
-                    "matched_mentions": pattern_labels[pattern["id"]],
-                    "match_score": pattern.get("match_score"),
-                }
-            )
-
-        image_path = debug_dir / f"page_{page_number:03d}_mentions.png"
-        for mention in saved_mentions:
-            if mention.get("page") == page_number and not mention.get("image"):
-                mention["image"] = str(image_path)
-        for pattern in saved_patterns:
-            if pattern.get("page") == page_number and not pattern.get("image"):
-                pattern["image"] = str(image_path)
-        cv2.imwrite(str(image_path), cv2.cvtColor(debug, cv2.COLOR_RGB2BGR))
-        saved_images.append(str(image_path))
-
-        for index, mention in enumerate(page_mentions, start=1):
-            legend_match = legend_matches.get(index)
-            pattern = legend_match["pattern"] if legend_match else None
-            saved_mentions.append(
-                {
-                    "image": str(image_path),
-                    "mention_index": f"M{index}",
-                    "page": page_number,
-                    "material_name": mention.material_name,
-                    "line_text": mention.line_text,
-                    "keyword": mention.keyword,
-                    "bbox": [int(round(value)) for value in mention.bbox],
-                    "source": mention.source,
-                    "legend_index": f"L{pattern_index_by_id[pattern['id']]}" if pattern else None,
-                    "legend_bbox": pattern["bbox"] if pattern else None,
-                    "legend_match_score": round(legend_match["score"], 4) if legend_match else None,
-                }
-            )
-
-    meta_path = debug_dir / "mentions.json"
-    if saved_mentions:
-        meta_path.write_text(
-            json.dumps({"images": saved_images, "mentions": saved_mentions, "legend_patterns": saved_patterns}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        logger.info("Saved mention bbox debug images: %s", len(saved_images))
-        return {"images": saved_images, "mentions": saved_mentions, "legend_patterns": saved_patterns, "meta": str(meta_path)}
-
-    return {"images": [], "mentions": [], "legend_patterns": [], "meta": None}
-
-
 def extract_pattern_legends_for_page(
     image: Any,
     page_number: int,
@@ -772,9 +629,6 @@ def analyze_pdf_file(
     output_dir: str | Path = DEFAULT_OUTPUT_DIR,
     ocr_backend: str = "auto",
     force_ocr: bool = False,
-    fallback_mm_per_px: float | None = None,
-    min_zone_area_px: int | None = None,
-    save_csv: bool = True,
     tesseract_psm: int = 11,
     save_rendered_pages: bool = False,
 ) -> dict[str, Any]:
@@ -794,138 +648,3 @@ def analyze_pdf_file(
     if save_rendered_pages:
         rendered_page_paths = save_rendered_pages(rendered_pages, Path.cwd(), dpi)
     mentions = extract_material_mentions(words_by_page)
-
-    zones_by_page: dict[int, list[dict[str, Any]]] = {}
-    for page in rendered_pages:
-        page_number = page["page"]
-        page_words = words_by_page.get(page_number, [])
-        zones_by_page[page_number] = detect_material_zones(
-            page["image"],
-            page_number,
-            min_zone_area_px=min_zone_area_px,
-            ignore_bboxes=[word.bbox for word in page_words],
-        )
-
-    mentions_debug = save_mention_debug_images(
-        rendered_pages,
-        mentions,
-        run_dir,
-        words_by_page=words_by_page,
-        all_zones_by_page=zones_by_page,
-        min_zone_area_px=min_zone_area_px,
-    )
-
-    # warnings: list[str] = []
-    # if not mentions:
-    #     warnings.append("No natural-stone material keywords found in OCR/PDF text")
-
-    # scale_by_page, scale_warnings = build_scale_map(rendered_pages, words_by_page, fallback_mm_per_px)
-    # warnings.extend(scale_warnings)
-
-    # mentions_by_page: dict[int, list[MaterialMention]] = defaultdict(list)
-    # for mention in mentions:
-    #     mentions_by_page[mention.page].append(mention)
-
-    # panels: list[dict[str, Any]] = []
-    # patterns_by_page: dict[int, list[dict[str, Any]]] = {}
-    # matched_panels_by_page: dict[int, list[dict[str, Any]]] = defaultdict(list)
-    # for page in rendered_pages:
-    #     page_number = page["page"]
-    #     page_mentions = mentions_by_page.get(page_number, [])
-    #     page_words = words_by_page.get(page_number, [])
-
-    #     scale_info = scale_by_page[page_number]
-    #     all_zones = detect_material_zones(page["image"], page_number, min_zone_area_px=min_zone_area_px, ignore_bboxes=[word.bbox for word in page_words])
-    #     logger.info("Page %s OpenCV zones: %s", page_number, len(all_zones))
-
-    #     page_patterns = extract_pattern_legends_for_page(page["image"], page_number, page_mentions, all_zones, page["width_px"], page["height_px"], page_words)
-    #     patterns_by_page[page_number] = page_patterns
-    #     if not page_patterns:
-    #         continue
-
-    #     matched_zones = match_zones_to_patterns(all_zones, page_patterns, page["image"])
-    #     matched_panels_by_page[page_number] = []
-    #     page_segments = detect_line_segments(page["image"])
-    #     global_mm_per_px = scale_info.get("mm_per_px")
-
-    #     for zone in matched_zones:
-    #         pattern = next((item for item in page_patterns if item.get("id") == zone.get("pattern_id")), None)
-    #         if pattern is None:
-    #             continue
-    #         zone_mm_per_px, zone_dims = estimate_zone_scale(zone, page_words, page_segments, page["width_px"], page["height_px"], fallback_mm_per_px=global_mm_per_px)
-    #         zone_scale_source = "zone_dimension_line" if zone_mm_per_px != global_mm_per_px and zone_mm_per_px else scale_info.get("source", "missing")
-    #         panel = add_metric_fields(zone, mm_per_px=zone_mm_per_px, scale_source=str(zone_scale_source))
-    #         panel.update(
-    #             {
-    #                 "material_name": pattern["name"],
-    #                 "material_keyword": pattern["name"],
-    #                 "material_line": pattern.get("line_text"),
-    #                 "material_source": "pattern_legend",
-    #                 "pattern_id": pattern["id"],
-    #                 "pattern_name": pattern["name"],
-    #                 "pattern_score": zone.get("pattern_score"),
-    #                 "zone_dimensions": zone_dims,
-    #             }
-    #         )
-    #         panels.append(panel)
-    #         matched_panels_by_page[page_number].append(panel)
-
-    # pattern_summary = summarize_pattern_panels(panels)
-    # summary = summarize_panels(panels)
-    # write_csv(run_dir, panels, summary)
-    # write_pattern_summary_csv(run_dir, pattern_summary)
-    # pattern_debug = save_pattern_debug_images(rendered_pages, patterns_by_page, matched_panels_by_page, run_dir, mentions=mentions)
-
-    # return {
-    #     "run_id": run_id,
-    #     "file_name": pdf_path.name,
-    #     "pages": len(rendered_pages),
-    #     "warnings": warnings,
-    #     "mentions_debug": mentions_debug,
-    #     "pattern_debug": pattern_debug,
-    #     "combined_debug": pattern_debug,
-    #     "pattern_images": pattern_debug.get("pattern_images", []),
-    #     "matched_areas": pattern_debug.get("matched_areas", []),
-    #     "pattern_summary": pattern_summary,
-    #     "patterns": [{"page": page, "patterns": patterns} for page, patterns in sorted(patterns_by_page.items())],
-    #     "summary": summary,
-    #     "panels": panels,
-    # }
-
-
-# FastAPI app (optional)
-def create_app():
-    from fastapi import FastAPI, File, UploadFile, HTTPException, Query
-
-    api = FastAPI(title=APP_NAME)
-
-    @api.get("/health")
-    def health():
-        from pipestone_ocr import has_module
-        return {"status": "ok", "dependencies": {
-            "pymupdf": has_module("fitz"),
-            "numpy": has_module("numpy"),
-            "cv2": has_module("cv2"),
-            "pytesseract": has_module("pytesseract"),
-        }}
-
-    @api.post("/analyze-pdf")
-    async def analyze(pdf: UploadFile = File(...), ocr_backend: str = "auto", fallback_mm_per_px: float = None):
-        import tempfile, shutil
-        temp_dir = Path(tempfile.mkdtemp(prefix="pipestone_"))
-        try:
-            temp_path = temp_dir / "upload.pdf"
-            content = await pdf.read()
-            temp_path.write_bytes(content)
-            return analyze_pdf_file(str(temp_path), ocr_backend=ocr_backend, fallback_mm_per_px=fallback_mm_per_px)
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
-    return api
-
-
-app = None
-try:
-    app = create_app()
-except Exception:
-    pass

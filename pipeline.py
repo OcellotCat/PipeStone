@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PipeStone - facade layout PDF analyzer. Entry point wrapper."""
 
-from pipeline_main import analyze_pdf_file, setup_logging, APP_NAME, DEFAULT_DPI, DEFAULT_OUTPUT_DIR
+from pipeline_logic import APP_NAME, DEFAULT_DPI, DEFAULT_OUTPUT_DIR, analyze_pdf_file, setup_logging
 
 # Re-export for backward compatibility
 __all__ = ["analyze_pdf_file", "setup_logging", "APP_NAME", "DEFAULT_DPI", "DEFAULT_OUTPUT_DIR"]
@@ -16,7 +16,6 @@ if __name__ == "__main__":
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--ocr-backend", default="auto")
     parser.add_argument("--force-ocr", action="store_true")
-    parser.add_argument("--fallback-mm-per-px", type=float, default=None)
     parser.add_argument("--json", action="store_true")
 
     args = parser.parse_args()
