@@ -50,7 +50,7 @@ def cleanup_material_label(label: str) -> str:
     return label[:120]
 
 
-def guess_material_name(line_text: str) -> str:
+def guess_material_name_by_regexp(line_text: str) -> str:
     cleaned = line_text.strip(" :-\t")
 
     for stone_type in KNOWN_STONE_TYPES:
@@ -61,35 +61,8 @@ def guess_material_name(line_text: str) -> str:
             logger.info("Material guess via regex: type=%s name=%r", stone_type, name)
             return name
 
-    name = _guess_with_semantic_fallback(cleaned)
-    if name:
-        logger.info("Material guess via semantic search: name=%r", name)
-        return name
-
-    after_colon = re.split(r"[:;-]", cleaned, maxsplit=1)
-    if len(after_colon) == 2:
-        candidate = cleanup_material_label(after_colon[1])
-        if candidate and normalize_text(candidate) not in {"30 мм", "мм"}:
-            logger.info("Material guess via colon fallback: candidate=%r", candidate)
-            return candidate
-
-    candidate = cleanup_material_label(cleaned)
-    if 8 <= len(candidate) <= 12 * len(candidate.split()):
-        logger.info("Material guess via cleaned fallback: candidate=%r", candidate)
-        return candidate
-
     logger.info("Material guess default")
     return "Натуральный камень"
-
-
-def _guess_with_semantic_fallback(text: str) -> str | None:
-    stone_type, score = semantic_best_stone_type(text)
-    if stone_type is None:
-        return None
-    match = re.search(rf"\b{stone_type}\b", text, re.IGNORECASE)
-    if match:
-        return cleanup_material_label(text[match.start():])
-    return stone_type
 
 
 def extract_material_mentions(words_by_page: dict[int, list[OcrWord]]) -> list[MaterialMention]:
@@ -110,7 +83,7 @@ def extract_material_mentions(words_by_page: dict[int, list[OcrWord]]) -> list[M
                     continue
                 keyword = match.group(0)
 
-            material_name = guess_material_name(line.text)
+            material_name = guess_material_name_by_regexp(line.text)
             key = (
                 page,
                 normalize_text(material_name),

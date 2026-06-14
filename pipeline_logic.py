@@ -7,6 +7,7 @@ import csv
 import datetime as dt
 import json
 import logging
+import re
 import uuid
 from collections import defaultdict
 from pathlib import Path
@@ -25,6 +26,7 @@ from pipestone_cv import (
 )
 from pipestone_ocr import (
     OcrWord,
+    bbox_union,
     collect_ocr_words,
     render_pdf_pages,
     summarize_panels,
@@ -33,7 +35,8 @@ from pipestone_ocr import (
 from pipeline_material_search import (
     MaterialMention,
     extract_material_mentions,
-    guess_material_name,
+    guess_material_name_by_regexp,
+    normalize_text,
 )
 
 logger = logging.getLogger("pipestone")
@@ -202,10 +205,161 @@ def write_csv(run_dir: Path, panels: list[dict[str, Any]], summary: list[dict[st
     return csv_path
 
 
+def normalize_match_text(text: str) -> str:
+    text = normalize_text(text)
+    text = re.sub(r"[^0-9a-zа-яё]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def text_tokens(text: str) -> set[str]:
+    return {token for token in normalize_match_text(text).split() if len(token) > 1}
+
+
+def material_text_match_score(candidate_text: str, material_name: str) -> float:
+    candidate = normalize_match_text(candidate_text)
+    material = normalize_match_text(material_name)
+    if not material:
+        return 1.0
+    if material in candidate or candidate in material:
+        return 0.0
+    tokens = text_tokens(material)
+    if not tokens:
+        return 1.0
+    matched = sum(1 for token in tokens if token in candidate)
+    return max(0.0, 1.0 - matched / len(tokens))
+
+
+def legend_title_score(text: str) -> float:
+    normalized = normalize_match_text(text)
+    if not normalized:
+        return 1.0
+    if "условн" in normalized and "обознач" in normalized:
+        return 0.0
+    if "экспликац" in normalized:
+        return 0.0
+    if "обознач" in normalized and any(token in normalized for token in ("материал", "отдел", "облицов")):
+        return 0.15
+    if "легенд" in normalized:
+        return 0.15
+    return 1.0
+
+
+def bbox_contains_center(bbox: tuple[float, float, float, float], center: tuple[float, float]) -> bool:
+    return bbox[0] <= center[0] <= bbox[2] and bbox[1] <= center[1] <= bbox[3]
+
+
+def center_distance_to_bbox(center: tuple[float, float], bbox: tuple[float, float, float, float]) -> float:
+    dx = max(bbox[0] - center[0], 0.0, center[0] - bbox[2])
+    dy = max(bbox[1] - center[1], 0.0, center[1] - bbox[3])
+    return (dx * dx + dy * dy) ** 0.5
+
+
+def find_legend_block(lines: list[Any], page_width_px: int, page_height_px: int) -> tuple[float, float, float, float] | None:
+    title_lines = [line for line in lines if legend_title_score(line.text) < 0.5]
+    if not title_lines:
+        return None
+
+    title = sorted(title_lines, key=lambda item: bbox_center(item.bbox)[1])[0]
+    title_center = bbox_center(title.bbox)
+    page_scale = min(page_width_px, page_height_px)
+    expanded_bbox = (
+        max(0.0, title.bbox[0] - page_scale * 0.18),
+        max(0.0, title.bbox[1] - page_scale * 0.35),
+        min(float(page_width_px), title.bbox[2] + page_scale * 0.18),
+        min(float(page_height_px), title.bbox[3] + page_scale * 0.35),
+    )
+    block_lines = [line for line in lines if bbox_contains_center(expanded_bbox, bbox_center(line.bbox))]
+    if len(block_lines) < 2:
+        return None
+    return bbox_union([line.bbox for line in block_lines])
+
+
+def legend_zones(
+    all_zones: list[dict[str, Any]],
+    max_pattern_area: float,
+    legend_bbox: tuple[float, float, float, float] | None,
+    page_width_px: int,
+    page_height_px: int,
+) -> list[dict[str, Any]]:
+    zones = [zone for zone in all_zones if float(zone.get("bbox_area_px", 0)) <= max_pattern_area]
+    if legend_bbox is None:
+        return sorted(zones, key=lambda item: (item["bbox_px"][1], item["bbox_px"][0]))
+
+    page_scale = min(page_width_px, page_height_px)
+    pad = max(50.0, page_scale * 0.04)
+    expanded_bbox = (
+        max(0.0, legend_bbox[0] - pad),
+        max(0.0, legend_bbox[1] - pad),
+        min(float(page_width_px), legend_bbox[2] + pad),
+        min(float(page_height_px), legend_bbox[3] + pad),
+    )
+    return [
+        zone
+        for zone in zones
+        if bbox_contains_center(expanded_bbox, bbox_center(tuple(float(value) for value in zone["bbox_px"])))
+    ]
+
+
+def candidate_text(candidate: dict[str, Any]) -> str:
+    return " ".join(str(candidate.get(key) or "") for key in ("name", "line_text", "keyword"))
+
+
+def match_candidate_to_zone(
+    candidate: dict[str, Any],
+    zone: dict[str, Any],
+    max_pattern_area: float,
+    page_width_px: int,
+    page_height_px: int,
+) -> float:
+    text = candidate_text(candidate)
+    material_name = str(candidate.get("name") or candidate.get("line_text") or "")
+    text_score = material_text_match_score(text, material_name)
+    keyword = candidate.get("keyword")
+    if keyword:
+        text_score = min(text_score, material_text_match_score(text, str(keyword)))
+
+    candidate_center = bbox_center(candidate["bbox"])
+    zone_bbox = tuple(float(value) for value in zone["bbox_px"])
+    distance_score = center_distance_to_bbox(candidate_center, zone_bbox) / max(min(page_width_px, page_height_px), 1.0)
+    area_score = float(zone.get("bbox_area_px", 0)) / max(max_pattern_area, 1.0)
+
+    if text_score <= 0.55:
+        return text_score * 0.72 + distance_score * 0.20 + min(area_score, 1.0) * 0.08
+    return 0.72 + text_score * 0.18 + distance_score * 0.07 + min(area_score, 1.0) * 0.03
+
+
+def match_patterns_to_mentions(
+    patterns: list[dict[str, Any]],
+    mentions: list[MaterialMention],
+) -> tuple[dict[int, dict[str, Any]], set[str]]:
+    matches_by_mention_index: dict[int, dict[str, Any]] = {}
+    matched_pattern_ids: set[str] = set()
+    for mention_index, mention in enumerate(mentions, start=1):
+        best_pattern = None
+        best_score = float("inf")
+        for pattern in patterns:
+            pattern_text = " ".join(str(pattern.get(key) or "") for key in ("name", "line_text"))
+            score = min(
+                material_text_match_score(pattern_text, mention.material_name),
+                material_text_match_score(pattern_text, mention.line_text),
+                material_text_match_score(pattern_text, mention.keyword or "") if mention.keyword else 1.0,
+            )
+            if score < best_score:
+                best_score = score
+                best_pattern = pattern
+        if best_pattern is not None and best_score <= 0.55:
+            matches_by_mention_index[mention_index] = {"pattern": best_pattern, "score": best_score}
+            matched_pattern_ids.add(best_pattern["id"])
+    return matches_by_mention_index, matched_pattern_ids
+
+
 def save_mention_debug_images(
     rendered_pages: list[dict[str, Any]],
     mentions: list[MaterialMention],
     run_dir: Path,
+    words_by_page: dict[int, list[OcrWord]] | None = None,
+    all_zones_by_page: dict[int, list[dict[str, Any]]] | None = None,
+    min_zone_area_px: int | None = None,
 ) -> dict[str, Any]:
     cv2 = require_module("cv2", "pip install opencv-python-headless")
     np = require_module("numpy", "pip install numpy")
@@ -219,9 +373,11 @@ def save_mention_debug_images(
 
     saved_images: list[str] = []
     saved_mentions: list[dict[str, Any]] = []
+    saved_patterns: list[dict[str, Any]] = []
 
     for page in rendered_pages:
-        page_mentions = mentions_by_page.get(page["page"], [])
+        page_number = page["page"]
+        page_mentions = mentions_by_page.get(page_number, [])
         if not page_mentions:
             continue
 
@@ -240,34 +396,98 @@ def save_mention_debug_images(
             cv2.rectangle(debug, (x0, y0), (x1, y1), color, thickness, cv2.LINE_AA)
             cv2.putText(debug, f"M{index}", (x0, max(14, y0 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, thickness + 1, cv2.LINE_AA)
 
-        image_path = debug_dir / f"page_{page['page']:03d}_mentions.png"
+        page_words = words_by_page.get(page_number, []) if words_by_page else []
+        all_zones = (all_zones_by_page or {}).get(page_number)
+        if all_zones is None and page_words:
+            all_zones = detect_material_zones(
+                page["image"],
+                page_number,
+                min_zone_area_px=min_zone_area_px,
+                ignore_bboxes=[word.bbox for word in page_words],
+            )
+        page_patterns = (
+            extract_pattern_legends_for_page(
+                page["image"],
+                page_number,
+                page_mentions,
+                all_zones or [],
+                width_px,
+                height_px,
+                page_words,
+            )
+            if all_zones
+            else []
+        )
+        legend_matches, matched_pattern_ids = match_patterns_to_mentions(page_patterns, page_mentions)
+        pattern_index_by_id = {pattern["id"]: index for index, pattern in enumerate(page_patterns, start=1)}
+        pattern_labels: dict[str, list[str]] = defaultdict(list)
+        for mention_index, match in legend_matches.items():
+            pattern_labels[match["pattern"]["id"]].append(f"M{mention_index}")
+
+        for pattern_index, pattern in enumerate(page_patterns, start=1):
+            if pattern["id"] not in matched_pattern_ids:
+                continue
+            x0, y0, x1, y1 = [int(round(value)) for value in pattern["bbox"]]
+            x0 = max(0, min(x0, width_px - 1))
+            y0 = max(0, min(y0, height_px - 1))
+            x1 = max(0, min(x1, width_px - 1))
+            y1 = max(0, min(y1, height_px - 1))
+            color = (0, 180, 255)
+            cv2.rectangle(debug, (x0, y0), (x1, y1), color, thickness + 2, cv2.LINE_AA)
+            cv2.putText(debug, ",".join(pattern_labels[pattern["id"]]), (x0, max(14, y0 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, thickness + 2, cv2.LINE_AA)
+            saved_patterns.append(
+                {
+                    "image": "",
+                    "legend_index": f"L{pattern_index}",
+                    "page": page_number,
+                    "pattern_id": pattern["id"],
+                    "name": pattern["name"],
+                    "bbox": [x0, y0, x1, y1],
+                    "legend_bbox": pattern.get("legend_bbox"),
+                    "matched_mentions": pattern_labels[pattern["id"]],
+                    "match_score": pattern.get("match_score"),
+                }
+            )
+
+        image_path = debug_dir / f"page_{page_number:03d}_mentions.png"
+        for mention in saved_mentions:
+            if mention.get("page") == page_number and not mention.get("image"):
+                mention["image"] = str(image_path)
+        for pattern in saved_patterns:
+            if pattern.get("page") == page_number and not pattern.get("image"):
+                pattern["image"] = str(image_path)
         cv2.imwrite(str(image_path), cv2.cvtColor(debug, cv2.COLOR_RGB2BGR))
         saved_images.append(str(image_path))
 
         for index, mention in enumerate(page_mentions, start=1):
+            legend_match = legend_matches.get(index)
+            pattern = legend_match["pattern"] if legend_match else None
             saved_mentions.append(
                 {
                     "image": str(image_path),
                     "mention_index": f"M{index}",
-                    "page": mention.page,
+                    "page": page_number,
                     "material_name": mention.material_name,
                     "line_text": mention.line_text,
                     "keyword": mention.keyword,
                     "bbox": [int(round(value)) for value in mention.bbox],
                     "source": mention.source,
+                    "legend_index": f"L{pattern_index_by_id[pattern['id']]}" if pattern else None,
+                    "legend_bbox": pattern["bbox"] if pattern else None,
+                    "legend_match_score": round(legend_match["score"], 4) if legend_match else None,
                 }
             )
 
     meta_path = debug_dir / "mentions.json"
     if saved_mentions:
         meta_path.write_text(
-            json.dumps({"images": saved_images, "mentions": saved_mentions}, ensure_ascii=False, indent=2),
+            json.dumps({"images": saved_images, "mentions": saved_mentions, "legend_patterns": saved_patterns}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         logger.info("Saved mention bbox debug images: %s", len(saved_images))
-        return {"images": saved_images, "mentions": saved_mentions, "meta": str(meta_path)}
+        return {"images": saved_images, "mentions": saved_mentions, "legend_patterns": saved_patterns, "meta": str(meta_path)}
 
-    return {"images": [], "mentions": [], "meta": None}
+    return {"images": [], "mentions": [], "legend_patterns": [], "meta": None}
 
 
 def extract_pattern_legends_for_page(
@@ -281,7 +501,9 @@ def extract_pattern_legends_for_page(
 ) -> list[dict[str, Any]]:
     page_area = float(page_width_px * page_height_px)
     max_pattern_area = page_area * 0.04
-    legend_distance = min(page_width_px, page_height_px) * 0.15
+    lines = words_to_lines(words)
+    legend_bbox = find_legend_block(lines, page_width_px, page_height_px)
+    page_legend_zones = legend_zones(all_zones, max_pattern_area, legend_bbox, page_width_px, page_height_px)
 
     candidates: list[dict[str, Any]] = []
     for mention in page_mentions:
@@ -289,14 +511,15 @@ def extract_pattern_legends_for_page(
             {
                 "name": mention.material_name,
                 "line_text": mention.line_text,
+                "keyword": mention.keyword,
                 "bbox": mention.bbox,
                 "source": "material_mention",
             }
         )
 
     if not candidates:
-        for line in words_to_lines(words):
-            name = guess_material_name(line.text) or line.text
+        for line in lines:
+            name = guess_material_name_by_regexp(line.text) or line.text
             candidates.append(
                 {
                     "name": name,
@@ -310,23 +533,21 @@ def extract_pattern_legends_for_page(
     used_zone_ids: set[str] = set()
 
     for candidate in candidates:
-        candidate_center = bbox_center(candidate["bbox"])
-        nearest_zone = None
-        nearest_distance = float("inf")
-        for zone in all_zones:
+        best_zone = None
+        best_score = float("inf")
+        for zone in page_legend_zones:
             if str(zone.get("zone_id")) in used_zone_ids:
                 continue
-            if zone.get("bbox_area_px", 0) > max_pattern_area:
-                continue
-            zone_center = bbox_center(tuple(float(value) for value in zone["bbox_px"]))
-            distance = ((candidate_center[0] - zone_center[0]) ** 2 + (candidate_center[1] - zone_center[1]) ** 2) ** 0.5
-            if distance < nearest_distance:
-                nearest_distance = distance
-                nearest_zone = zone
-        if nearest_zone is None or nearest_distance > legend_distance:
+            score = match_candidate_to_zone(candidate, zone, max_pattern_area, page_width_px, page_height_px)
+            if score < best_score:
+                best_score = score
+                best_zone = zone
+
+        max_match_score = 0.72 if legend_bbox is not None else 1.0
+        if best_zone is None or best_score > max_match_score:
             continue
 
-        descriptor = extract_pattern_descriptor(image, bbox=nearest_zone["bbox_px"])
+        descriptor = extract_pattern_descriptor(image, bbox=best_zone["bbox_px"])
         name = candidate["name"] or candidate["line_text"] or "Pattern"
         pattern_id = f"p{page_number:03d}-pat{len(patterns) + 1:03d}"
         patterns.append(
@@ -336,13 +557,15 @@ def extract_pattern_legends_for_page(
                 "name": name,
                 "pattern": descriptor,
                 "color": descriptor.get("mean_color"),
-                "bbox": nearest_zone["bbox_px"],
-                "zone_id": nearest_zone.get("zone_id"),
+                "bbox": best_zone["bbox_px"],
+                "zone_id": best_zone.get("zone_id"),
                 "line_text": candidate["line_text"],
                 "source": candidate["source"],
+                "legend_bbox": list(legend_bbox) if legend_bbox else None,
+                "match_score": round(best_score, 4),
             }
         )
-        used_zone_ids.add(str(nearest_zone.get("zone_id")))
+        used_zone_ids.add(str(best_zone.get("zone_id")))
 
     return patterns
 
@@ -517,6 +740,20 @@ def save_pattern_debug_images(
 
 
 
+def save_rendered_pages(rendered_pages: list[dict[str, Any]], repo_root: Path, dpi: int) -> list[str]:
+    cv2 = require_module("cv2", "pip install opencv-python-headless")
+    saved: list[str] = []
+    for page in rendered_pages:
+        image = page["image"]
+        page_number = page["page"]
+        image_path = repo_root / f"page_{page_number:03d}.png"
+        cv2.imwrite(str(image_path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+        saved.append(str(image_path))
+    if saved:
+        logger.info("Saved rendered pages to repo root: %s images at %s DPI", len(saved), dpi)
+    return saved
+
+
 def log_analysis_result(result: dict[str, Any]) -> None:
     logger.info("========== NATURAL STONE RESULT ==========")
     for warning in result["warnings"]:
@@ -539,8 +776,8 @@ def analyze_pdf_file(
     min_zone_area_px: int | None = None,
     save_csv: bool = True,
     tesseract_psm: int = 11,
+    save_rendered_pages: bool = False,
 ) -> dict[str, Any]:
-    import re
     pdf_path = Path(pdf_path)
     if not pdf_path.exists():
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
@@ -552,8 +789,31 @@ def analyze_pdf_file(
     logger.info("Starting PDF analysis: file=%s", pdf_path)
     rendered_pages = render_pdf_pages(pdf_path, dpi=dpi)
     words_by_page = collect_ocr_words(pdf_path, rendered_pages, backend=ocr_backend, force_ocr=force_ocr, tesseract_psm=tesseract_psm)
+
+    rendered_page_paths: list[str] = []
+    if save_rendered_pages:
+        rendered_page_paths = save_rendered_pages(rendered_pages, Path.cwd(), dpi)
     mentions = extract_material_mentions(words_by_page)
-    mentions_debug = save_mention_debug_images(rendered_pages, mentions, run_dir)
+
+    zones_by_page: dict[int, list[dict[str, Any]]] = {}
+    for page in rendered_pages:
+        page_number = page["page"]
+        page_words = words_by_page.get(page_number, [])
+        zones_by_page[page_number] = detect_material_zones(
+            page["image"],
+            page_number,
+            min_zone_area_px=min_zone_area_px,
+            ignore_bboxes=[word.bbox for word in page_words],
+        )
+
+    mentions_debug = save_mention_debug_images(
+        rendered_pages,
+        mentions,
+        run_dir,
+        words_by_page=words_by_page,
+        all_zones_by_page=zones_by_page,
+        min_zone_area_px=min_zone_area_px,
+    )
 
     # warnings: list[str] = []
     # if not mentions:
