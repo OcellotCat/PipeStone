@@ -11,7 +11,6 @@ from typing import Any
 logger = logging.getLogger("pipestone.semantic")
 
 STONE_SEMANTIC_THRESHOLD = 0.35
-_E5_MODEL: Any = None
 _SEMANTIC_MODEL: Any = None
 
 KNOWN_STONE_TYPES = (
