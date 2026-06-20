@@ -103,6 +103,45 @@ def _rgb_array(image: Any) -> Any:
     return array[:, :, :3].astype(np.uint8)
 
 
+def trim_white_margins(
+    image: Any,
+    mask: Any | None = None,
+    *,
+    white_threshold: int = 248,
+    padding: int = 2,
+) -> tuple[Any, Any | None, tuple[int, int, int, int]]:
+    """Crop white margins around a hatch sample, preserving a small padding."""
+    cv2, np = _require_cv2_np()
+    rgb = _rgb_array(image)
+    if rgb.size == 0:
+        return rgb, mask, (0, 0, 0, 0)
+
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    content = gray < int(white_threshold)
+
+    if mask is not None:
+        mask_array = (np.asarray(mask) > 0)
+        if mask_array.shape == content.shape:
+            content &= mask_array
+
+    if not np.any(content):
+        return rgb, mask, (0, 0, rgb.shape[1], rgb.shape[0])
+
+    rows, cols = np.where(content)
+    height, width = rgb.shape[:2]
+    x0 = max(0, int(cols.min()) - padding)
+    y0 = max(0, int(rows.min()) - padding)
+    x1 = min(width, int(cols.max()) + padding + 1)
+    y1 = min(height, int(rows.max()) + padding + 1)
+    if x1 <= x0 or y1 <= y0:
+        return rgb, mask, (0, 0, width, height)
+
+    trimmed_mask = None
+    if mask is not None:
+        trimmed_mask = np.asarray(mask)[y0:y1, x0:x1]
+    return rgb[y0:y1, x0:x1], trimmed_mask, (x0, y0, x1, y1)
+
+
 def _normalize_angle_deg(angle: float) -> float:
     angle = float(angle) % 180.0
     if angle > 90.0:

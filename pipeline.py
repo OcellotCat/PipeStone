@@ -28,7 +28,7 @@ if __name__ == "__main__":
 
     setup_logging()
     if args.image:
-        result = analyze_image_file(args.image, ocr_backend=args.ocr_backend)
+        result = analyze_image_file(args.image, output_dir=args.output_dir, ocr_backend=args.ocr_backend)
     else:
         result = analyze_pdf_file(
             args.pdf,
