@@ -3,12 +3,13 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 import re
 from dataclasses import dataclass
 from typing import Any
 
-from pipestone_ocr import OcrWord, words_to_lines
+from pipestone_ocr import OcrWord, OcrLine, words_to_lines, bbox_union
 from pipestone_semantic import (
     KNOWN_STONE_TYPES,
     STONE_KEYWORD_RE,
@@ -18,6 +19,13 @@ from pipestone_semantic import (
 
 logger = logging.getLogger("pipestone.material_search")
 
+def has_module(module_name: str) -> bool:
+    return importlib.util.find_spec(module_name) is not None
+
+def require_module(module_name: str, install_hint: str) -> Any:
+    if not has_module(module_name):
+        raise RuntimeError(f"Не найден модуль {module_name}. Установите: {install_hint}")
+    return __import__(module_name)
 
 @dataclass(frozen=True)
 class MaterialMention:
@@ -70,7 +78,8 @@ def extract_material_mentions(words_by_page: dict[int, list[OcrWord]]) -> list[M
     seen: set[tuple[int, str, tuple[int, int, int, int]]] = set()
 
     for page, words in words_by_page.items():
-        for line in words_to_lines(words):
+        page_lines = words_to_lines(words)
+        for line in page_lines:
             normalized = normalize_text(line.text)
             match = STONE_KEYWORD_RE.search(normalized)
             keyword = match.group(0) if match else None
@@ -84,24 +93,47 @@ def extract_material_mentions(words_by_page: dict[int, list[OcrWord]]) -> list[M
                 keyword = match.group(0)
 
             material_name = guess_material_name_by_regexp(line.text)
+
+            keyword_bbox = line.bbox
+            if keyword:
+                normalized_line = normalize_text(line.text)
+                keyword_match = re.search(re.escape(keyword), normalized_line, re.IGNORECASE)
+                if keyword_match:
+                    keyword_start_idx = keyword_match.start()
+                    normalized_prefix = normalized_line[:keyword_start_idx]
+                    n_words_before = len(normalized_prefix.split()) if normalized_prefix.strip() else 0
+
+                    line_words = [w for w in words if w.page == page]
+                    line_words_sorted = sorted(line_words, key=lambda w: w.bbox[0])
+                    if len(line_words_sorted) > n_words_before:
+                        keyword_words = line_words_sorted[n_words_before:]
+                        if keyword_words:
+                            keyword_bbox = bbox_union([w.bbox for w in keyword_words])
+
             key = (
                 page,
                 normalize_text(material_name),
-                tuple(int(round(value / 10.0)) for value in line.bbox),
+                tuple(int(round(value / 10.0)) for value in keyword_bbox),
             )
             if key in seen:
                 continue
             seen.add(key)
-            mentions.append(
-                MaterialMention(
-                    page=page,
-                    material_name=material_name,
-                    line_text=line.text,
-                    keyword=keyword,
-                    bbox=line.bbox,
-                    confidence=line.confidence,
-                    source=line.source,
-                )
+            mention = MaterialMention(
+                page=page,
+                material_name=material_name,
+                line_text=line.text,
+                keyword=keyword,
+                bbox=keyword_bbox,
+                confidence=line.confidence,
+                source=line.source,
+            )
+            mentions.append(mention)
+            logger.info(
+                "Material mention: page=%s material=%r line_text=%r keyword=%r",
+                page,
+                material_name,
+                line.text,
+                keyword,
             )
 
     if mentions:
@@ -139,3 +171,71 @@ def assign_material(zone: dict[str, Any], page_mentions: list[MaterialMention], 
     if len(unique) == 1:
         return all_mentions[0]
     return None
+
+
+def log_material_mentions(mentions: list[MaterialMention]) -> None:
+    logger.info("========== MATERIAL MENTIONS ==========")
+    if not mentions:
+        logger.info("No material mentions found")
+        return
+    mentions_by_page: dict[int, list[MaterialMention]] = {}
+    for mention in mentions:
+        mentions_by_page.setdefault(mention.page, []).append(mention)
+    for page in sorted(mentions_by_page.keys()):
+        logger.info("Page %s:", page)
+        for idx, mention in enumerate(mentions_by_page[page], start=1):
+            logger.info(
+                "  M%s: material=%r keyword=%r line_text=%r bbox=(%.1f,%.1f,%.1f,%.1f)",
+                idx,
+                mention.material_name,
+                mention.keyword,
+                mention.line_text,
+                mention.bbox[0],
+                mention.bbox[1],
+                mention.bbox[2],
+                mention.bbox[3],
+            )
+
+
+def save_material_mention_images(
+    mentions: list[MaterialMention],
+    rendered_pages: list[dict[str, Any]],
+    run_dir: Path,
+) -> list[str]:
+    cv2 = require_module("cv2", "pip install opencv-python-headless")
+    np = require_module("numpy", "pip install numpy")
+
+    image_dir = run_dir / "material_mentions"
+    image_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_images: list[str] = []
+    mentions_by_page: dict[int, list[MaterialMention]] = {}
+    for mention in mentions:
+        mentions_by_page.setdefault(mention.page, []).append(mention)
+
+    for page in rendered_pages:
+        page_number = page["page"]
+        page_mentions = mentions_by_page.get(page_number, [])
+        if not page_mentions:
+            continue
+
+        height_px, width_px = page["image"].shape[:2]
+        debug = np.array(page["image"], copy=True)
+        thickness = max(2, min(width_px, height_px) // 500)
+
+        for idx, mention in enumerate(page_mentions, start=1):
+            x0, y0, x1, y1 = [int(round(value)) for value in mention.bbox]
+            x0 = max(0, min(x0, width_px - 1))
+            y0 = max(0, min(y0, height_px - 1))
+            x1 = max(0, min(x1, width_px - 1))
+            y1 = max(0, min(y1, height_px - 1))
+            color = (0, 0, 255)
+            cv2.rectangle(debug, (x0, y0), (x1, y1), color, max(1, thickness - 1), cv2.LINE_AA)
+            cv2.putText(debug, f"M{idx}", (x0, max(14, y0 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, max(1, thickness), cv2.LINE_AA)
+
+        image_path = image_dir / f"page_{page_number:03d}_mentions.png"
+        cv2.imwrite(str(image_path), cv2.cvtColor(debug, cv2.COLOR_RGB2BGR))
+        saved_images.append(str(image_path))
+        logger.info("Saved material mention image: %s", image_path)
+
+    return saved_images

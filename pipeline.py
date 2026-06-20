@@ -30,7 +30,6 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         ocr_backend=args.ocr_backend,
         force_ocr=args.force_ocr,
-        fallback_mm_per_px=args.fallback_mm_per_px,
     )
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))

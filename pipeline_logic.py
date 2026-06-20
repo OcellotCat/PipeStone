@@ -2,6 +2,7 @@
 """Main analysis pipeline for PipeStone - facade layout PDF processing."""
 
 from __future__ import annotations
+from hatch_detector import find_material_regions
 
 import csv
 import datetime as dt
@@ -31,7 +32,9 @@ from pipeline_material_search import (
     MaterialMention,
     extract_material_mentions,
     guess_material_name_by_regexp,
+    log_material_mentions,
     normalize_text,
+    save_material_mention_images,
 )
 
 logger = logging.getLogger("pipestone")
@@ -648,3 +651,29 @@ def analyze_pdf_file(
     if save_rendered_pages:
         rendered_page_paths = save_rendered_pages(rendered_pages, Path.cwd(), dpi)
     mentions = extract_material_mentions(words_by_page)
+
+    for mention in mentions:
+        page_idx = mention.page
+
+        page_image = rendered_pages[page_idx-1]
+
+        result = find_material_regions(
+            page_image,
+            mention.bbox,
+        )
+
+        logger.info(
+            "Found %s regions of material %s",
+            result["count"],
+            mention.text,
+        )
+
+    log_material_mentions(mentions)
+    mention_images = save_material_mention_images(mentions, rendered_pages, run_dir)
+
+    return {
+        "pdf_path": str(pdf_path),
+        "run_dir": str(run_dir),
+        "mentions": mentions,
+        "mention_images": mention_images,
+    }
