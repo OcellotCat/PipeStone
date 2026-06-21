@@ -6,6 +6,7 @@ from __future__ import annotations
 import datetime as dt
 import importlib.util
 import logging
+import math
 import re
 import uuid
 from dataclasses import dataclass
@@ -42,6 +43,10 @@ class LegendPatternMatch:
     score: float
     annotated_image: str
     pattern_image: str = ""
+    color_masked_image: str = ""
+    correlation_mask_image: str = ""
+    hatch_matches_image: str = ""
+    hatch_matches: tuple[dict[str, Any], ...] = ()
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -449,7 +454,7 @@ def clip_bbox(bbox: tuple[float, float, float, float], width: int, height: int) 
     return x0, y0, x1, y1
 
 
-def trim_white_margins(image: Any, *, white_threshold: int = 248, padding: int = 3) -> Any:
+def trim_white_margins(image: Any, *, white_threshold: int = 248, padding: int = 0) -> Any:
     cv2 = require_module("cv2", "pip install opencv-python-headless")
     np = require_module("numpy", "pip install numpy")
 
@@ -470,6 +475,510 @@ def trim_white_margins(image: Any, *, white_threshold: int = 248, padding: int =
     if x1 <= x0 or y1 <= y0:
         return image
     return image[y0:y1, x0:x1]
+
+
+def trim_binary_foreground(mask: Any, *, padding: int = 0) -> Any:
+    np = require_module("numpy", "pip install numpy")
+
+    if mask.size == 0:
+        return mask
+    rows, cols = np.where(mask > 0)
+    if rows.size == 0 or cols.size == 0:
+        return mask
+    height, width = mask.shape[:2]
+    x0 = max(0, int(cols.min()) - padding)
+    y0 = max(0, int(rows.min()) - padding)
+    x1 = min(width, int(cols.max()) + padding + 1)
+    y1 = min(height, int(rows.max()) + padding + 1)
+    if x1 <= x0 or y1 <= y0:
+        return mask
+    return mask[y0:y1, x0:x1]
+
+
+def color_mask_by_pattern(image: Any, pattern_crop: Any) -> dict[str, Any]:
+    cv2 = require_module("cv2", "pip install opencv-python-headless")
+    np = require_module("numpy", "pip install numpy")
+
+    if image.size == 0 or pattern_crop.size == 0:
+        return {"image": image, "mask": np.zeros(image.shape[:2], dtype=np.uint8)}
+
+    pattern_gray = cv2.cvtColor(pattern_crop, cv2.COLOR_RGB2GRAY) if pattern_crop.ndim == 3 else pattern_crop
+    pattern_content = pattern_gray < 245
+    if int(np.count_nonzero(pattern_content)) < 4:
+        return {"image": image, "mask": np.full(image.shape[:2], 255, dtype=np.uint8)}
+
+    pattern_pixels = pattern_crop[pattern_content].reshape(-1, 3).astype(np.float32)
+    median_rgb = np.median(pattern_pixels, axis=0)
+    mad = np.median(np.abs(pattern_pixels - median_rgb), axis=0)
+    tolerance = np.maximum(mad * 4.0, 28.0)
+
+    image_float = image.astype(np.float32)
+    color_delta = np.abs(image_float - median_rgb.reshape(1, 1, 3))
+    color_mask = np.all(color_delta <= tolerance.reshape(1, 1, 3), axis=2)
+
+    pattern_luma = float(np.mean(cv2.cvtColor(pattern_pixels.astype(np.uint8).reshape(-1, 1, 3), cv2.COLOR_RGB2GRAY)))
+    image_gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
+    if pattern_luma < 120:
+        color_mask |= image_gray < min(180, int(pattern_luma + 70))
+
+    mask = color_mask.astype(np.uint8) * 255
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((2, 2), dtype=np.uint8), iterations=1)
+    masked = np.full_like(image, 255)
+    masked[mask > 0] = image[mask > 0]
+    return {"image": masked, "mask": mask}
+
+
+def extract_correlation_template_64(pattern_binary: Any) -> Any:
+    cv2 = require_module("cv2", "pip install opencv-python-headless")
+    np = require_module("numpy", "pip install numpy")
+
+    binary = trim_binary_foreground(pattern_binary, padding=0)
+    if binary.size == 0:
+        return np.zeros((64, 64), dtype=np.uint8)
+
+    height, width = binary.shape[:2]
+    if height >= 64 and width >= 64:
+        integral = cv2.integral((binary > 0).astype(np.uint8))
+        best_score = -1
+        best_xy = (0, 0)
+        step = max(1, min(height, width) // 24)
+        for y in range(0, height - 63, step):
+            for x in range(0, width - 63, step):
+                score = int(integral[y + 64, x + 64] - integral[y, x + 64] - integral[y + 64, x] + integral[y, x])
+                if score > best_score:
+                    best_score = score
+                    best_xy = (x, y)
+        x, y = best_xy
+        return binary[y : y + 64, x : x + 64]
+
+    scale = min(1.0, 64.0 / max(height, width))
+    resized = cv2.resize(binary, (max(1, int(round(width * scale))), max(1, int(round(height * scale)))), interpolation=cv2.INTER_NEAREST)
+    canvas = np.zeros((64, 64), dtype=np.uint8)
+    y0 = (64 - resized.shape[0]) // 2
+    x0 = (64 - resized.shape[1]) // 2
+    canvas[y0 : y0 + resized.shape[0], x0 : x0 + resized.shape[1]] = resized
+    return canvas
+
+
+def correlation_similarity_mask(page_binary: Any, template_64: Any) -> dict[str, Any]:
+    cv2 = require_module("cv2", "pip install opencv-python-headless")
+    np = require_module("numpy", "pip install numpy")
+
+    if page_binary.shape[0] < 64 or page_binary.shape[1] < 64 or int(np.count_nonzero(template_64)) < 4:
+        empty = np.zeros(page_binary.shape[:2], dtype=np.uint8)
+        return {"mask": empty, "score_map": empty, "threshold": 1.0, "max_score": 0.0}
+
+    result = cv2.matchTemplate(page_binary, template_64, cv2.TM_CCOEFF_NORMED)
+    _, max_score, _, _ = cv2.minMaxLoc(result)
+    threshold = max(0.28, min(0.62, float(max_score) * 0.72))
+    mask = np.zeros(page_binary.shape[:2], dtype=np.uint8)
+    points = (result >= threshold).astype(np.uint8)
+    components, _ = cv2.findContours(points, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for contour in components:
+        x, y, w, h = cv2.boundingRect(contour)
+        mask[y : y + h + 63, x : x + w + 63] = 255
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), dtype=np.uint8), iterations=1)
+    score_map = cv2.normalize(result, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    return {"mask": mask, "score_map": score_map, "threshold": round(float(threshold), 4), "max_score": round(float(max_score), 4)}
+
+
+def clean_pattern_recognition_image(image: Any) -> dict[str, Any]:
+    cv2 = require_module("cv2", "pip install opencv-python-headless")
+    np = require_module("numpy", "pip install numpy")
+
+    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
+    denoised = cv2.fastNlMeansDenoising(gray, None, h=12, templateWindowSize=7, searchWindowSize=21)
+    denoised = cv2.medianBlur(denoised, 3)
+    contrast = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(denoised)
+    binary = cv2.adaptiveThreshold(
+        contrast,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV,
+        31,
+        7,
+    )
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, np.ones((2, 2), dtype=np.uint8), iterations=1)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, np.ones((2, 2), dtype=np.uint8), iterations=1)
+
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cleaned = np.zeros(binary.shape, dtype=np.uint8)
+    min_area = max(2.0, float(binary.shape[0] * binary.shape[1]) * 0.000002)
+    for contour in contours:
+        if cv2.contourArea(contour) >= min_area:
+            cv2.drawContours(cleaned, [contour], -1, 255, thickness=cv2.FILLED)
+
+    visible = cv2.cvtColor(255 - cleaned, cv2.COLOR_GRAY2RGB)
+    return {"gray": gray, "binary": cleaned, "visible": visible}
+
+
+def normalize_hatch_angle(angle: float) -> float:
+    angle = float(angle) % 180.0
+    if angle > 90.0:
+        angle -= 180.0
+    return angle
+
+
+def angle_distance(a: float | None, b: float | None) -> float | None:
+    if a is None or b is None:
+        return None
+    diff = abs(float(a) - float(b)) % 180.0
+    return min(diff, 180.0 - diff)
+
+
+def grouped_centers(indices: Any, max_gap: int = 2) -> list[float]:
+    values = [int(value) for value in indices]
+    if not values:
+        return []
+    groups: list[list[int]] = [[values[0]]]
+    for value in values[1:]:
+        if value <= groups[-1][-1] + max_gap:
+            groups[-1].append(value)
+        else:
+            groups.append([value])
+    return [float(sum(group)) / len(group) for group in groups]
+
+
+def hatch_descriptor(line_mask: Any, *, expected_angle: float | None = None) -> dict[str, Any]:
+    cv2 = require_module("cv2", "pip install opencv-python-headless")
+    np = require_module("numpy", "pip install numpy")
+
+    if line_mask.size == 0 or int(np.count_nonzero(line_mask)) < 8:
+        return {"angle": None, "spacing": None, "density": 0.0, "line_count": 0}
+
+    height, width = line_mask.shape[:2]
+    min_len = max(8, int(min(height, width) * 0.35))
+    raw_lines = cv2.HoughLinesP(
+        line_mask,
+        rho=1,
+        theta=np.pi / 180,
+        threshold=max(8, min_len // 2),
+        minLineLength=min_len,
+        maxLineGap=max(3, min_len // 3),
+    )
+
+    angles: list[float] = []
+    lengths: list[float] = []
+    if raw_lines is not None:
+        for raw in raw_lines[:, 0, :]:
+            x0, y0, x1, y1 = [float(value) for value in raw]
+            length = math.hypot(x1 - x0, y1 - y0)
+            if length < min_len:
+                continue
+            angles.append(normalize_hatch_angle(math.degrees(math.atan2(y1 - y0, x1 - x0))))
+            lengths.append(length)
+
+    selected_angles = angles
+    selected_lengths = lengths
+    if expected_angle is not None and angles:
+        filtered = [
+            (value, length)
+            for value, length in zip(angles, lengths)
+            if (distance := angle_distance(value, expected_angle)) is not None and distance <= 18.0
+        ]
+        if filtered:
+            selected_angles = [value for value, _ in filtered]
+            selected_lengths = [length for _, length in filtered]
+
+    angle = None
+    if selected_angles:
+        bins: dict[float, float] = {}
+        for value, length in zip(selected_angles, selected_lengths):
+            key = round(value / 5.0) * 5.0
+            bins[key] = bins.get(key, 0.0) + length
+        best_bin = max(bins.items(), key=lambda item: item[1])[0]
+        near = [value for value in selected_angles if (distance := angle_distance(value, best_bin)) is not None and distance <= 7.5]
+        angle = float(median(near or selected_angles))
+
+    spacing = None
+    if angle is not None:
+        center = (width / 2.0, height / 2.0)
+        matrix = cv2.getRotationMatrix2D(center, -angle, 1.0)
+        rotated = cv2.warpAffine(line_mask, matrix, (width, height), flags=cv2.INTER_NEAREST, borderValue=0)
+        projection = cv2.reduce(rotated, 1, cv2.REDUCE_SUM, dtype=cv2.CV_32F).ravel()
+        if projection.size:
+            threshold = max(float(np.percentile(projection, 75)), float(width * 255 * 0.04))
+            centers = grouped_centers(np.flatnonzero(projection >= threshold), max_gap=2)
+            if len(centers) >= 2:
+                spacing = float(median(np.diff(centers)))
+
+    density = float(np.count_nonzero(line_mask)) / max(float(height * width), 1.0)
+    return {
+        "angle": round(angle, 2) if angle is not None else None,
+        "spacing": round(spacing, 2) if spacing is not None else None,
+        "density": round(density, 4),
+        "line_count": len(selected_angles),
+    }
+
+
+def gabor_hatch_response(gray: Any, angle: float | None, spacing: float | None) -> float:
+    cv2 = require_module("cv2", "pip install opencv-python-headless")
+    np = require_module("numpy", "pip install numpy")
+
+    if gray.size == 0 or angle is None:
+        return 0.0
+    wavelength = float(spacing) if spacing and spacing > 2.0 else max(6.0, min(gray.shape[:2]) / 6.0)
+    theta = math.radians(float(angle) + 90.0)
+    kernel = cv2.getGaborKernel((21, 21), sigma=4.0, theta=theta, lambd=wavelength, gamma=0.45, psi=0, ktype=cv2.CV_32F)
+    response = cv2.filter2D(gray.astype(np.float32), cv2.CV_32F, kernel)
+    return round(float(np.mean(np.abs(response))) / 255.0, 4)
+
+
+def bbox_overlap_ratio(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
+    ix0 = max(a[0], b[0])
+    iy0 = max(a[1], b[1])
+    ix1 = min(a[2], b[2])
+    iy1 = min(a[3], b[3])
+    if ix1 <= ix0 or iy1 <= iy0:
+        return 0.0
+    inter = (ix1 - ix0) * (iy1 - iy0)
+    area_a = max(1.0, (a[2] - a[0]) * (a[3] - a[1]))
+    area_b = max(1.0, (b[2] - b[0]) * (b[3] - b[1]))
+    return inter / min(area_a, area_b)
+
+
+def template_match_candidates(
+    image_binary: Any,
+    template_binary: Any,
+    *,
+    exclude_bbox: tuple[float, float, float, float] | None = None,
+    max_candidates: int = 80,
+) -> list[dict[str, Any]]:
+    cv2 = require_module("cv2", "pip install opencv-python-headless")
+    np = require_module("numpy", "pip install numpy")
+
+    th, tw = template_binary.shape[:2]
+    ih, iw = image_binary.shape[:2]
+    if th < 6 or tw < 6 or th >= ih or tw >= iw:
+        return []
+
+    result = cv2.matchTemplate(image_binary, template_binary, cv2.TM_CCOEFF_NORMED)
+    _, max_value, _, _ = cv2.minMaxLoc(result)
+    threshold = max(0.38, min(0.72, float(max_value) * 0.72))
+    dilated = cv2.dilate(result, np.ones((max(3, tw // 3), max(3, th // 3)), dtype=np.uint8))
+    ys, xs = np.where((result >= threshold) & (result == dilated))
+
+    candidates: list[dict[str, Any]] = []
+    for x, y in sorted(zip(xs, ys), key=lambda item: float(result[item[1], item[0]]), reverse=True):
+        bbox = (float(x), float(y), float(x + tw), float(y + th))
+        if exclude_bbox is not None and bbox_overlap_ratio(bbox, exclude_bbox) > 0.2:
+            continue
+        if any(bbox_overlap_ratio(bbox, tuple(candidate["bbox"])) > 0.45 for candidate in candidates):
+            continue
+        candidates.append({"bbox": bbox, "template_score": round(float(result[y, x]), 4)})
+        if len(candidates) >= max_candidates:
+            break
+    return candidates
+
+
+def gabor_response_map(gray: Any, angle: float | None, spacing: float | None) -> Any:
+    cv2 = require_module("cv2", "pip install opencv-python-headless")
+    np = require_module("numpy", "pip install numpy")
+
+    if gray.size == 0 or angle is None:
+        return np.zeros(gray.shape[:2], dtype=np.uint8)
+    wavelength = float(spacing) if spacing and spacing > 2.0 else max(6.0, min(gray.shape[:2]) / 80.0)
+    theta = math.radians(float(angle) + 90.0)
+    kernel_size = max(15, int(round(wavelength * 4.0)) | 1)
+    kernel_size = min(kernel_size, 61)
+    kernel = cv2.getGaborKernel(
+        (kernel_size, kernel_size),
+        sigma=max(3.0, wavelength * 0.6),
+        theta=theta,
+        lambd=wavelength,
+        gamma=0.45,
+        psi=0,
+        ktype=cv2.CV_32F,
+    )
+    response = np.abs(cv2.filter2D(gray.astype(np.float32), cv2.CV_32F, kernel))
+    return cv2.normalize(response, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+
+
+def hatch_region_candidates(
+    page_binary: Any,
+    page_gray: Any,
+    reference: dict[str, Any],
+    template_shape: tuple[int, int],
+    *,
+    exclude_bbox: tuple[float, float, float, float] | None = None,
+    max_candidates: int = 120,
+) -> list[dict[str, Any]]:
+    cv2 = require_module("cv2", "pip install opencv-python-headless")
+    np = require_module("numpy", "pip install numpy")
+
+    ref_angle = reference.get("angle")
+    if ref_angle is None:
+        return []
+
+    th, tw = template_shape
+    response = gabor_response_map(page_gray, ref_angle, reference.get("spacing"))
+    threshold = max(35, int(np.percentile(response, 88)))
+    response_mask = (response >= threshold).astype(np.uint8) * 255
+    line_mask = cv2.bitwise_and(response_mask, page_binary)
+
+    spacing = float(reference.get("spacing") or max(6.0, min(th, tw) / 3.0))
+    kernel_size = max(3, min(31, int(round(spacing * 1.5)) | 1))
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
+    region_mask = cv2.morphologyEx(line_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+    region_mask = cv2.dilate(region_mask, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)), iterations=1)
+
+    contours, _ = cv2.findContours(region_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    image_area = float(page_binary.shape[0] * page_binary.shape[1])
+    template_area = max(1.0, float(th * tw))
+    candidates: list[dict[str, Any]] = []
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        area = float(w * h)
+        if w < max(8, tw // 2) or h < max(8, th // 2):
+            continue
+        if area < template_area * 0.35 or area > image_area * 0.35:
+            continue
+        bbox = (float(x), float(y), float(x + w), float(y + h))
+        if exclude_bbox is not None and bbox_overlap_ratio(bbox, exclude_bbox) > 0.2:
+            continue
+        fill = float(np.count_nonzero(page_binary[y : y + h, x : x + w])) / max(area, 1.0)
+        if fill < 0.003:
+            continue
+        score = float(np.mean(response[y : y + h, x : x + w])) / 255.0
+        candidates.append({"bbox": bbox, "template_score": round(score, 4), "source": "gabor_region"})
+
+    candidates.sort(key=lambda item: (item["template_score"], (item["bbox"][2] - item["bbox"][0]) * (item["bbox"][3] - item["bbox"][1])), reverse=True)
+    deduped: list[dict[str, Any]] = []
+    for candidate in candidates:
+        if any(bbox_overlap_ratio(tuple(candidate["bbox"]), tuple(existing["bbox"])) > 0.6 for existing in deduped):
+            continue
+        deduped.append(candidate)
+        if len(deduped) >= max_candidates:
+            break
+    return deduped
+
+
+def merge_hatch_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    for candidate in sorted(candidates, key=lambda item: item.get("template_score", 0.0), reverse=True):
+        bbox = tuple(candidate["bbox"])
+        current = next((item for item in merged if bbox_overlap_ratio(bbox, tuple(item["bbox"])) > 0.55), None)
+        if current is None:
+            merged.append(candidate)
+            continue
+        if candidate.get("template_score", 0.0) > current.get("template_score", 0.0):
+            current.update(candidate)
+    return merged
+
+
+def recognize_hatch_pattern(
+    image: Any,
+    pattern_crop: Any,
+    match: LegendPatternMatch,
+    output_dir: Path,
+    *,
+    page: int,
+) -> dict[str, Any]:
+    cv2 = require_module("cv2", "pip install opencv-python-headless")
+    np = require_module("numpy", "pip install numpy")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    color_masked = color_mask_by_pattern(image, pattern_crop)
+    color_masked_path = output_dir / f"page_{page:03d}_color_masked_by_pattern.png"
+    cv2.imwrite(str(color_masked_path), cv2.cvtColor(color_masked["image"], cv2.COLOR_RGB2BGR))
+
+    cleaned_page = clean_pattern_recognition_image(color_masked["image"])
+    cleaned_template = clean_pattern_recognition_image(pattern_crop)
+    page_binary = cv2.bitwise_and(cleaned_page["binary"], color_masked["mask"])
+    template_binary = trim_binary_foreground(cleaned_template["binary"], padding=0)
+
+    if template_binary.size == 0 or int(np.count_nonzero(template_binary)) < 8:
+        return {"color_masked_image": str(color_masked_path), "correlation_mask_image": "", "matches_image": "", "matches": [], "reference": {}}
+
+    template_64 = extract_correlation_template_64(template_binary)
+    correlation = correlation_similarity_mask(page_binary, template_64)
+    page_binary = cv2.bitwise_and(page_binary, correlation["mask"])
+    correlation_mask_path = output_dir / f"page_{page:03d}_correlation_mask_64.png"
+    cv2.imwrite(str(correlation_mask_path), correlation["mask"])
+
+    reference = hatch_descriptor(template_binary)
+    reference_gray = cleaned_template["gray"]
+    reference_gabor = gabor_hatch_response(reference_gray, reference.get("angle"), reference.get("spacing"))
+    template_candidates = template_match_candidates(page_binary, template_binary, exclude_bbox=match.table_bbox)
+    for candidate in template_candidates:
+        candidate["source"] = "template"
+    region_candidates = hatch_region_candidates(
+        page_binary,
+        cleaned_page["gray"],
+        reference,
+        template_binary.shape[:2],
+        exclude_bbox=match.table_bbox,
+    )
+    candidates = merge_hatch_candidates(template_candidates + region_candidates)
+    response_map = gabor_response_map(cleaned_page["gray"], reference.get("angle"), reference.get("spacing"))
+
+    verified: list[dict[str, Any]] = []
+    th, tw = template_binary.shape[:2]
+    for candidate in candidates:
+        x0, y0, x1, y1 = [int(round(value)) for value in candidate["bbox"]]
+        patch_binary = page_binary[y0:y1, x0:x1]
+        patch_gray = cleaned_page["gray"][y0:y1, x0:x1]
+        descriptor = hatch_descriptor(patch_binary, expected_angle=reference.get("angle"))
+        gabor = gabor_hatch_response(patch_gray, reference.get("angle"), reference.get("spacing"))
+        angle_diff = angle_distance(descriptor.get("angle"), reference.get("angle"))
+        spacing_diff = None
+        if descriptor.get("spacing") and reference.get("spacing"):
+            spacing_diff = abs(float(descriptor["spacing"]) - float(reference["spacing"])) / max(float(reference["spacing"]), 1.0)
+
+        hough_ok = angle_diff is None or angle_diff <= 18.0
+        spacing_ok = spacing_diff is None or spacing_diff <= 0.55
+        density_ok = descriptor.get("density", 0.0) >= max(0.004, float(reference.get("density") or 0.0) * 0.2)
+        gabor_ok = gabor >= max(0.006, reference_gabor * 0.25)
+        source_ok = candidate.get("source") == "gabor_region" or candidate.get("template_score", 0.0) >= 0.32
+        verified_ok = hough_ok and spacing_ok and density_ok and gabor_ok and source_ok
+
+        item = {
+            "bbox": [float(x0), float(y0), float(x1), float(y1)],
+            "template_score": candidate["template_score"],
+            "source": candidate.get("source", "template"),
+            "hatch_angle": descriptor.get("angle"),
+            "hatch_spacing_px": descriptor.get("spacing"),
+            "angle_diff": round(float(angle_diff), 3) if angle_diff is not None else None,
+            "spacing_diff_ratio": round(float(spacing_diff), 3) if spacing_diff is not None else None,
+            "gabor_response": gabor,
+        }
+        if verified_ok:
+            verified.append(item)
+
+    annotated = np.full_like(image, 255)
+    for item in verified:
+        x0, y0, x1, y1 = [int(round(value)) for value in item["bbox"]]
+        patch_response = response_map[y0:y1, x0:x1]
+        response_threshold = max(25, int(np.percentile(patch_response, 70))) if patch_response.size else 255
+        patch_mask = (page_binary[y0:y1, x0:x1] > 0) & (patch_response >= response_threshold)
+        if not np.any(patch_mask):
+            patch_mask = page_binary[y0:y1, x0:x1] > 0
+        annotated[y0:y1, x0:x1][patch_mask] = (0, 0, 0)
+
+    matches_path = output_dir / f"page_{page:03d}_hatch_matches.png"
+    cv2.imwrite(str(matches_path), cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR))
+    logger.info(
+        "Hatch recognition: page=%s candidates=%s verified=%s template=%sx%s",
+        page,
+        len(candidates),
+        len(verified),
+        tw,
+        th,
+    )
+    return {
+        "color_masked_image": str(color_masked_path),
+        "correlation_mask_image": str(correlation_mask_path),
+        "matches_image": str(matches_path),
+        "matches": verified,
+        "reference": {
+            "hatch_angle": reference.get("angle"),
+            "hatch_spacing_px": reference.get("spacing"),
+            "density": reference.get("density"),
+            "gabor_response": reference_gabor,
+            "correlation_threshold": correlation["threshold"],
+            "correlation_max_score": correlation["max_score"],
+        },
+    }
 
 
 def save_annotated_pattern_image(
@@ -512,13 +1021,22 @@ def save_annotated_pattern_image(
     logger.info("Saved pattern annotation: %s", output_path)
 
     pattern_image_path = ""
+    color_masked_image_path = ""
+    correlation_mask_image_path = ""
+    hatch_matches_image_path = ""
+    hatch_matches: tuple[dict[str, Any], ...] = ()
     if pattern_box is not None:
         x0, y0, x1, y1 = pattern_box
-        pattern_crop = trim_white_margins(image[y0:y1, x0:x1], padding=max(2, thickness))
+        pattern_crop = trim_white_margins(image[y0:y1, x0:x1], padding=0)
         pattern_path = image_dir / f"page_{page:03d}_legend_pattern_trimmed.png"
         cv2.imwrite(str(pattern_path), cv2.cvtColor(pattern_crop, cv2.COLOR_RGB2BGR))
         pattern_image_path = str(pattern_path)
         logger.info("Saved trimmed legend pattern image: %s", pattern_path)
+        recognition = recognize_hatch_pattern(image, pattern_crop, match, image_dir, page=page)
+        color_masked_image_path = recognition.get("color_masked_image", "")
+        correlation_mask_image_path = recognition.get("correlation_mask_image", "")
+        hatch_matches_image_path = recognition.get("matches_image", "")
+        hatch_matches = tuple(recognition.get("matches", []))
 
     return LegendPatternMatch(
         page=match.page,
@@ -529,6 +1047,10 @@ def save_annotated_pattern_image(
         score=match.score,
         annotated_image=str(output_path),
         pattern_image=pattern_image_path,
+        color_masked_image=color_masked_image_path,
+        correlation_mask_image=correlation_mask_image_path,
+        hatch_matches_image=hatch_matches_image_path,
+        hatch_matches=hatch_matches,
     )
 
 
@@ -542,6 +1064,10 @@ def match_to_dict(match: LegendPatternMatch) -> dict[str, Any]:
         "score": match.score,
         "annotated_image": match.annotated_image,
         "pattern_image": match.pattern_image,
+        "color_masked_image": match.color_masked_image,
+        "correlation_mask_image": match.correlation_mask_image,
+        "hatch_matches_image": match.hatch_matches_image,
+        "hatch_matches": list(match.hatch_matches),
     }
 
 
@@ -609,6 +1135,9 @@ def analyze_image_file(
         "pattern_matches": [match_to_dict(match) for match in matches],
         "annotated_images": [match.annotated_image for match in matches],
         "pattern_images": [match.pattern_image for match in matches if match.pattern_image],
+        "color_masked_images": [match.color_masked_image for match in matches if match.color_masked_image],
+        "correlation_mask_images": [match.correlation_mask_image for match in matches if match.correlation_mask_image],
+        "hatch_matches_images": [match.hatch_matches_image for match in matches if match.hatch_matches_image],
     }
 
 
@@ -664,4 +1193,7 @@ def analyze_pdf_file(
         "pattern_matches": [match_to_dict(match) for match in all_matches],
         "annotated_images": [match.annotated_image for match in all_matches],
         "pattern_images": [match.pattern_image for match in all_matches if match.pattern_image],
+        "color_masked_images": [match.color_masked_image for match in all_matches if match.color_masked_image],
+        "correlation_mask_images": [match.correlation_mask_image for match in all_matches if match.correlation_mask_image],
+        "hatch_matches_images": [match.hatch_matches_image for match in all_matches if match.hatch_matches_image],
     }
