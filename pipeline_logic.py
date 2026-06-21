@@ -45,6 +45,7 @@ class LegendPatternMatch:
     pattern_image: str = ""
     color_masked_image: str = ""
     correlation_mask_image: str = ""
+    correlation_regions_image: str = ""
     hatch_matches_image: str = ""
     hatch_matches: tuple[dict[str, Any], ...] = ()
 
@@ -528,6 +529,30 @@ def color_mask_by_pattern(image: Any, pattern_crop: Any) -> dict[str, Any]:
     return {"image": masked, "mask": mask}
 
 
+def remove_ocr_text_from_masked_image(masked_image: Any, mask: Any, words: list[OcrWord]) -> dict[str, Any]:
+    cv2 = require_module("cv2", "pip install opencv-python-headless")
+    np = require_module("numpy", "pip install numpy")
+
+    cleaned_image = np.array(masked_image, copy=True)
+    cleaned_mask = np.array(mask, copy=True)
+    height, width = cleaned_mask.shape[:2]
+    for word in words:
+        x0, y0, x1, y1 = [int(round(value)) for value in word.bbox]
+        pad_x = max(2, int((x1 - x0) * 0.35))
+        pad_y = max(2, int((y1 - y0) * 0.45))
+        x0 = max(0, x0 - pad_x)
+        y0 = max(0, y0 - pad_y)
+        x1 = min(width, x1 + pad_x)
+        y1 = min(height, y1 + pad_y)
+        if x1 <= x0 or y1 <= y0:
+            continue
+        cleaned_image[y0:y1, x0:x1] = 255
+        cleaned_mask[y0:y1, x0:x1] = 0
+
+    cleaned_mask = cv2.morphologyEx(cleaned_mask, cv2.MORPH_OPEN, np.ones((2, 2), dtype=np.uint8), iterations=1)
+    return {"image": cleaned_image, "mask": cleaned_mask}
+
+
 def extract_correlation_template_64(pattern_binary: Any) -> Any:
     cv2 = require_module("cv2", "pip install opencv-python-headless")
     np = require_module("numpy", "pip install numpy")
@@ -566,20 +591,30 @@ def correlation_similarity_mask(page_binary: Any, template_64: Any) -> dict[str,
 
     if page_binary.shape[0] < 64 or page_binary.shape[1] < 64 or int(np.count_nonzero(template_64)) < 4:
         empty = np.zeros(page_binary.shape[:2], dtype=np.uint8)
-        return {"mask": empty, "score_map": empty, "threshold": 1.0, "max_score": 0.0}
+        return {"mask": empty, "regions": empty, "score_map": empty, "threshold": 1.0, "max_score": 0.0}
 
     result = cv2.matchTemplate(page_binary, template_64, cv2.TM_CCOEFF_NORMED)
     _, max_score, _, _ = cv2.minMaxLoc(result)
-    threshold = max(0.28, min(0.62, float(max_score) * 0.72))
+    threshold = max(0.18, min(0.5, float(max_score) * 0.55))
     mask = np.zeros(page_binary.shape[:2], dtype=np.uint8)
     points = (result >= threshold).astype(np.uint8)
     components, _ = cv2.findContours(points, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     for contour in components:
         x, y, w, h = cv2.boundingRect(contour)
         mask[y : y + h + 63, x : x + w + 63] = 255
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), dtype=np.uint8), iterations=1)
+
+    dilate_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (33, 33))
+    dilated = cv2.dilate(mask, dilate_kernel, iterations=1)
+    join_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (65, 65))
+    regions = cv2.morphologyEx(dilated, cv2.MORPH_CLOSE, join_kernel, iterations=1)
     score_map = cv2.normalize(result, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    return {"mask": mask, "score_map": score_map, "threshold": round(float(threshold), 4), "max_score": round(float(max_score), 4)}
+    return {
+        "mask": mask,
+        "regions": regions,
+        "score_map": score_map,
+        "threshold": round(float(threshold), 4),
+        "max_score": round(float(max_score), 4),
+    }
 
 
 def clean_pattern_recognition_image(image: Any) -> dict[str, Any]:
@@ -870,6 +905,7 @@ def recognize_hatch_pattern(
     image: Any,
     pattern_crop: Any,
     match: LegendPatternMatch,
+    words: list[OcrWord],
     output_dir: Path,
     *,
     page: int,
@@ -879,6 +915,7 @@ def recognize_hatch_pattern(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     color_masked = color_mask_by_pattern(image, pattern_crop)
+    color_masked = remove_ocr_text_from_masked_image(color_masked["image"], color_masked["mask"], words)
     color_masked_path = output_dir / f"page_{page:03d}_color_masked_by_pattern.png"
     cv2.imwrite(str(color_masked_path), cv2.cvtColor(color_masked["image"], cv2.COLOR_RGB2BGR))
 
@@ -892,9 +929,11 @@ def recognize_hatch_pattern(
 
     template_64 = extract_correlation_template_64(template_binary)
     correlation = correlation_similarity_mask(page_binary, template_64)
-    page_binary = cv2.bitwise_and(page_binary, correlation["mask"])
+    page_binary = cv2.bitwise_and(page_binary, correlation["regions"])
     correlation_mask_path = output_dir / f"page_{page:03d}_correlation_mask_64.png"
     cv2.imwrite(str(correlation_mask_path), correlation["mask"])
+    correlation_regions_path = output_dir / f"page_{page:03d}_correlation_regions.png"
+    cv2.imwrite(str(correlation_regions_path), correlation["regions"])
 
     reference = hatch_descriptor(template_binary)
     reference_gray = cleaned_template["gray"]
@@ -968,6 +1007,7 @@ def recognize_hatch_pattern(
     return {
         "color_masked_image": str(color_masked_path),
         "correlation_mask_image": str(correlation_mask_path),
+        "correlation_regions_image": str(correlation_regions_path),
         "matches_image": str(matches_path),
         "matches": verified,
         "reference": {
@@ -984,6 +1024,7 @@ def recognize_hatch_pattern(
 def save_annotated_pattern_image(
     image: Any,
     match: LegendPatternMatch,
+    words: list[OcrWord],
     run_dir: Path,
     *,
     page: int,
@@ -1023,6 +1064,7 @@ def save_annotated_pattern_image(
     pattern_image_path = ""
     color_masked_image_path = ""
     correlation_mask_image_path = ""
+    correlation_regions_image_path = ""
     hatch_matches_image_path = ""
     hatch_matches: tuple[dict[str, Any], ...] = ()
     if pattern_box is not None:
@@ -1032,9 +1074,10 @@ def save_annotated_pattern_image(
         cv2.imwrite(str(pattern_path), cv2.cvtColor(pattern_crop, cv2.COLOR_RGB2BGR))
         pattern_image_path = str(pattern_path)
         logger.info("Saved trimmed legend pattern image: %s", pattern_path)
-        recognition = recognize_hatch_pattern(image, pattern_crop, match, image_dir, page=page)
+        recognition = recognize_hatch_pattern(image, pattern_crop, match, words, image_dir, page=page)
         color_masked_image_path = recognition.get("color_masked_image", "")
         correlation_mask_image_path = recognition.get("correlation_mask_image", "")
+        correlation_regions_image_path = recognition.get("correlation_regions_image", "")
         hatch_matches_image_path = recognition.get("matches_image", "")
         hatch_matches = tuple(recognition.get("matches", []))
 
@@ -1049,6 +1092,7 @@ def save_annotated_pattern_image(
         pattern_image=pattern_image_path,
         color_masked_image=color_masked_image_path,
         correlation_mask_image=correlation_mask_image_path,
+        correlation_regions_image=correlation_regions_image_path,
         hatch_matches_image=hatch_matches_image_path,
         hatch_matches=hatch_matches,
     )
@@ -1066,6 +1110,7 @@ def match_to_dict(match: LegendPatternMatch) -> dict[str, Any]:
         "pattern_image": match.pattern_image,
         "color_masked_image": match.color_masked_image,
         "correlation_mask_image": match.correlation_mask_image,
+        "correlation_regions_image": match.correlation_regions_image,
         "hatch_matches_image": match.hatch_matches_image,
         "hatch_matches": list(match.hatch_matches),
     }
@@ -1103,7 +1148,7 @@ def analyze_page_image(
         if match is None:
             logger.info("No legend pattern match for page %s line %r", page, material_line.text)
             continue
-        matches.append(save_annotated_pattern_image(image, match, run_dir, page=page))
+        matches.append(save_annotated_pattern_image(image, match, words, run_dir, page=page))
         break
 
     return material_lines, matches
@@ -1137,6 +1182,7 @@ def analyze_image_file(
         "pattern_images": [match.pattern_image for match in matches if match.pattern_image],
         "color_masked_images": [match.color_masked_image for match in matches if match.color_masked_image],
         "correlation_mask_images": [match.correlation_mask_image for match in matches if match.correlation_mask_image],
+        "correlation_regions_images": [match.correlation_regions_image for match in matches if match.correlation_regions_image],
         "hatch_matches_images": [match.hatch_matches_image for match in matches if match.hatch_matches_image],
     }
 
@@ -1195,5 +1241,6 @@ def analyze_pdf_file(
         "pattern_images": [match.pattern_image for match in all_matches if match.pattern_image],
         "color_masked_images": [match.color_masked_image for match in all_matches if match.color_masked_image],
         "correlation_mask_images": [match.correlation_mask_image for match in all_matches if match.correlation_mask_image],
+        "correlation_regions_images": [match.correlation_regions_image for match in all_matches if match.correlation_regions_image],
         "hatch_matches_images": [match.hatch_matches_image for match in all_matches if match.hatch_matches_image],
     }
