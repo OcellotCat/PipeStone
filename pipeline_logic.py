@@ -150,8 +150,10 @@ def save_reference_sample_debug_images(
     run_dir: Path,
     *,
     page: int,
+    legend_samples: list[MaterialLegendSample] | None = None,
 ) -> list[str]:
-    if not regions:
+    legend_samples = legend_samples or []
+    if not regions and not legend_samples:
         return []
 
     cv2 = require_module("cv2", "pip install opencv-python-headless")
@@ -165,6 +167,34 @@ def save_reference_sample_debug_images(
     thickness = max(2, min(width, height) // 850)
     saved_paths: list[str] = []
     seen_reference_boxes: set[tuple[int, int, int, int]] = set()
+
+    for index, sample in enumerate(legend_samples, start=1):
+        sample_box = _clip_bbox(sample.sample_bbox, width, height)
+        if sample_box is None:
+            continue
+        sx0, sy0, sx1, sy1 = sample_box
+        cv2.rectangle(annotated, (sx0, sy0), (sx1, sy1), (0, 220, 80), thickness + 1, cv2.LINE_AA)
+        cv2.putText(
+            annotated,
+            f"H{index}",
+            (sx0, max(18, sy0 - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (0, 180, 70),
+            max(1, thickness),
+            cv2.LINE_AA,
+        )
+
+        if sample_box in seen_reference_boxes:
+            continue
+        seen_reference_boxes.add(sample_box)
+        crop = image[sy0:sy1, sx0:sx1]
+        if crop.size == 0:
+            continue
+        crop, _, _ = trim_white_margins(crop, padding=max(1, min(crop.shape[:2]) // 50))
+        crop_path = debug_dir / f"page_{page:03d}_legend_hatch_{len(seen_reference_boxes):03d}.png"
+        cv2.imwrite(str(crop_path), cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))
+        saved_paths.append(str(crop_path))
 
     for index, region in enumerate(regions, start=1):
         region_box = _clip_bbox(region.bbox, width, height)
@@ -258,12 +288,24 @@ def analyze_pdf_file(
     for rendered_page in rendered_pages:
         page = rendered_page["page"]
         page_words = words_by_page.get(page, [])
-        page_samples = extract_material_legend_samples(rendered_page["image"], page_words, page=page)
+        page_mentions = [mention for mention in mentions if mention.page == page]
+        page_samples = extract_material_legend_samples(
+            rendered_page["image"],
+            page_words,
+            page=page,
+            label_mentions=page_mentions,
+        )
         legend_samples.extend(page_samples)
         page_regions = find_material_regions(rendered_page["image"], page_samples, page=page)
         material_regions.extend(page_regions)
         reference_debug_images.extend(
-            save_reference_sample_debug_images(rendered_page["image"], page_regions, run_dir, page=page)
+            save_reference_sample_debug_images(
+                rendered_page["image"],
+                page_regions,
+                run_dir,
+                page=page,
+                legend_samples=page_samples,
+            )
         )
     log_material_regions(material_regions)
 
@@ -294,6 +336,19 @@ def analyze_image_file(
     if warning:
         logger.warning("Image OCR warning: %s", warning)
     result = analyze_image_materials(str(image_path), words=words, page=1, image=image)
+    legend_samples = [
+        MaterialLegendSample(
+            page=item["page"],
+            material_name=item["material_name"],
+            table_bbox=tuple(item["table_bbox"]),
+            row_bbox=tuple(item["row_bbox"]),
+            sample_bbox=tuple(item["sample_bbox"]),
+            descriptor=item["descriptor"],
+            texture_type=item["texture_type"],
+            confidence=item["confidence"],
+        )
+        for item in result["legend_samples"]
+    ]
     material_regions = [
         MaterialRegionMatch(
             page=item["page"],
@@ -305,7 +360,13 @@ def analyze_image_file(
         )
         for item in result["material_regions"]
     ]
-    reference_debug_images = save_reference_sample_debug_images(image, material_regions, run_dir, page=1)
+    reference_debug_images = save_reference_sample_debug_images(
+        image,
+        material_regions,
+        run_dir,
+        page=1,
+        legend_samples=legend_samples,
+    )
     log_material_regions(material_regions)
     result["run_dir"] = str(run_dir)
     result["reference_debug_images"] = reference_debug_images

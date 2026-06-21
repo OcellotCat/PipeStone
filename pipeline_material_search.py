@@ -276,6 +276,92 @@ def _words_in_bbox(words: list[OcrWord], bbox: tuple[float, float, float, float]
     return selected
 
 
+def _find_designation_header_bbox(
+    words: list[OcrWord],
+    table_bbox: tuple[int, int, int, int],
+) -> tuple[float, float, float, float] | None:
+    table_words = _words_in_bbox(
+        words,
+        (float(table_bbox[0]), float(table_bbox[1]), float(table_bbox[2]), float(table_bbox[3])),
+    )
+    matches = [
+        word
+        for word in table_words
+        if "обознач" in normalize_text(word.text)
+    ]
+    if not matches:
+        return None
+    header = min(matches, key=lambda word: (word.bbox[1], word.bbox[0]))
+    return header.bbox
+
+
+def _line_center_y(line: Any) -> float:
+    return (float(line.bbox[1]) + float(line.bbox[3])) / 2.0
+
+
+def _row_for_y(horizontal_lines: list[int], y: float) -> tuple[int, int, int] | None:
+    for index, (row_y0, row_y1) in enumerate(zip(horizontal_lines, horizontal_lines[1:]), start=1):
+        if row_y1 - row_y0 < 12:
+            continue
+        if float(row_y0) <= y <= float(row_y1):
+            return index, int(row_y0), int(row_y1)
+    return None
+
+
+def _group_text_lines_by_table_row(table_text_lines: list[Any], horizontal_lines: list[int]) -> list[tuple[int, int, int, list[Any]]]:
+    grouped: dict[int, tuple[int, int, list[Any]]] = {}
+    for line in sorted(table_text_lines, key=lambda item: (item.bbox[1], item.bbox[0])):
+        row = _row_for_y(horizontal_lines, _line_center_y(line))
+        if row is None:
+            continue
+        row_index, row_y0, row_y1 = row
+        if row_index not in grouped:
+            grouped[row_index] = (row_y0, row_y1, [])
+        grouped[row_index][2].append(line)
+    return [
+        (row_index, row_y0, row_y1, row_lines)
+        for row_index, (row_y0, row_y1, row_lines) in sorted(grouped.items())
+        if row_lines
+    ]
+
+
+def _label_match_score(line_text: str, mention: MaterialMention) -> float:
+    line = normalize_text(line_text)
+    mention_text = normalize_text(" ".join([mention.material_name, mention.line_text, mention.keyword or ""]))
+    if not line or not mention_text:
+        return 0.0
+    if line in mention_text or mention_text in line:
+        return 1.0
+
+    line_tokens = {token for token in re.split(r"[^0-9a-zа-яё]+", line) if len(token) > 2}
+    mention_tokens = {token for token in re.split(r"[^0-9a-zа-яё]+", mention_text) if len(token) > 2}
+    if not line_tokens or not mention_tokens:
+        return 0.0
+    return len(line_tokens & mention_tokens) / max(len(line_tokens), 1)
+
+
+def _best_label_match(line_text: str, label_mentions: list[MaterialMention]) -> MaterialMention | None:
+    best: MaterialMention | None = None
+    best_score = 0.0
+    for mention in label_mentions:
+        score = _label_match_score(line_text, mention)
+        if score > best_score:
+            best = mention
+            best_score = score
+    if best is None or best_score < 0.35:
+        return None
+    return best
+
+
+def _dedupe_samples_by_texture_type(samples: list[MaterialLegendSample]) -> list[MaterialLegendSample]:
+    by_texture_type: dict[str, MaterialLegendSample] = {}
+    for sample in samples:
+        current = by_texture_type.get(sample.texture_type)
+        if current is None or sample.confidence > current.confidence:
+            by_texture_type[sample.texture_type] = sample
+    return list(by_texture_type.values())
+
+
 def classify_texture_type(descriptor: dict[str, Any]) -> str:
     angle = descriptor.get("hatch_angle")
     spacing = descriptor.get("hatch_spacing_px")
@@ -312,6 +398,7 @@ def extract_material_legend_samples(
     words: list[OcrWord],
     *,
     page: int = 1,
+    label_mentions: list[MaterialMention] | None = None,
 ) -> list[MaterialLegendSample]:
     processed = preprocess_drawing_image(image)
     horizontal, vertical, _ = extract_table_line_masks(processed["binary"])
@@ -331,12 +418,26 @@ def extract_material_legend_samples(
         else:
             sample_x0, sample_x1 = x0, x0 + int((x1 - x0) * 0.28)
             text_x0, text_x1 = sample_x1, x1
+        designation_bbox = _find_designation_header_bbox(words, table_bbox)
+        use_designation_x = designation_bbox is not None
+        if designation_bbox is not None:
+            sample_x0, sample_x1 = int(round(designation_bbox[0])), int(round(designation_bbox[2]))
+            text_x0, text_x1 = sample_x1, x1
 
-        for row_index, (row_y0, row_y1) in enumerate(zip(horizontal_lines, horizontal_lines[1:]), start=1):
-            if row_y1 - row_y0 < 12:
-                continue
+        table_text_words = _words_in_bbox(words, (float(text_x0), float(y0), float(text_x1), float(y1)))
+        table_text_lines = words_to_lines(table_text_words)
+        if table_text_lines:
+            row_items = _group_text_lines_by_table_row(table_text_lines, horizontal_lines)
+        else:
+            row_items = [
+                (row_index, int(row_y0), int(row_y1), [])
+                for row_index, (row_y0, row_y1) in enumerate(zip(horizontal_lines, horizontal_lines[1:]), start=1)
+                if row_y1 - row_y0 >= 12
+            ]
+
+        for row_index, row_y0, row_y1, row_text_lines in row_items:
             row_bbox = (float(x0), float(row_y0), float(x1), float(row_y1))
-            margin_x = max(2, int((sample_x1 - sample_x0) * 0.06))
+            margin_x = 0 if use_designation_x else max(2, int((sample_x1 - sample_x0) * 0.06))
             margin_y = max(2, int((row_y1 - row_y0) * 0.12))
             sample_bbox = (
                 float(sample_x0 + margin_x),
@@ -347,14 +448,20 @@ def extract_material_legend_samples(
             if sample_bbox[2] <= sample_bbox[0] or sample_bbox[3] <= sample_bbox[1]:
                 continue
 
-            text_words = _words_in_bbox(words, (float(text_x0), float(row_y0), float(text_x1), float(row_y1)))
-            line_text = " ".join(line.text for line in words_to_lines(text_words)).strip()
-            material_name = guess_material_name_by_regexp(line_text) if line_text else f"Материал {row_index}"
+            line_text = " ".join(line.text for line in row_text_lines).strip()
+            label_match = _best_label_match(line_text, label_mentions or []) if label_mentions is not None else None
+            if label_mentions is not None and label_match is None:
+                continue
+            material_name = (
+                label_match.material_name
+                if label_match is not None
+                else guess_material_name_by_regexp(line_text) if line_text else f"Материал {row_index}"
+            )
             descriptor = extract_pattern_descriptor(image, sample_bbox)
             if not _descriptor_has_pattern(descriptor):
                 continue
             texture_type = classify_texture_type(descriptor)
-            confidence = 0.85 if line_text else 0.55
+            confidence = 0.9 if label_match is not None else 0.85 if line_text else 0.55
             if descriptor.get("hatch_angle") is not None:
                 confidence += 0.1
             table_samples.append(
@@ -370,6 +477,7 @@ def extract_material_legend_samples(
                 )
             )
         if table_samples:
+            table_samples = _dedupe_samples_by_texture_type(table_samples)
             samples_by_table.append(table_samples)
 
     if samples_by_table:
@@ -379,7 +487,7 @@ def extract_material_legend_samples(
             for table_samples in samples_by_table
             if len(table_samples) == max_rows or (max_rows >= 4 and len(table_samples) >= 4)
         ]
-        samples = [sample for table_samples in selected_tables for sample in table_samples]
+        samples = _dedupe_samples_by_texture_type([sample for table_samples in selected_tables for sample in table_samples])
     else:
         samples = []
     logger.info("Legend material samples: page=%s count=%s", page, len(samples))
@@ -504,10 +612,12 @@ def analyze_image_materials(
 ) -> dict[str, Any]:
     image = image if image is not None else load_drawing_image(image_path)
     page_words = words or []
-    legend_samples = extract_material_legend_samples(image, page_words, page=page)
+    label_mentions = extract_material_mentions({page: page_words})
+    legend_samples = extract_material_legend_samples(image, page_words, page=page, label_mentions=label_mentions)
     regions = find_material_regions(image, legend_samples, page=page)
     return {
         "image_path": image_path,
+        "mentions": [_mention_to_dict(mention) for mention in label_mentions],
         "legend_samples": [_legend_sample_to_dict(sample) for sample in legend_samples],
         "material_regions": [_region_match_to_dict(region) for region in regions],
     }
@@ -523,6 +633,18 @@ def _legend_sample_to_dict(sample: MaterialLegendSample) -> dict[str, Any]:
         "descriptor": sample.descriptor,
         "texture_type": sample.texture_type,
         "confidence": sample.confidence,
+    }
+
+
+def _mention_to_dict(mention: MaterialMention) -> dict[str, Any]:
+    return {
+        "page": mention.page,
+        "material_name": mention.material_name,
+        "line_text": mention.line_text,
+        "keyword": mention.keyword,
+        "bbox": list(mention.bbox),
+        "confidence": mention.confidence,
+        "source": mention.source,
     }
 
 
