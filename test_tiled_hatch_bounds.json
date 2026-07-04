@@ -1,0 +1,103 @@
+{
+  "sample": "hatch.png",
+  "target": "test_tiled.jpg",
+  "hatch_definition": {
+    "line_type": "parallel_diagonal",
+    "line_types": [
+      {
+        "type": "parallel_diagonal",
+        "angle_degrees_image_xy": -42.29,
+        "spacing_px": 7.0,
+        "line_thickness_px": 2.74
+      }
+    ],
+    "angle_degrees_image_xy": -42.29,
+    "spacing_px": 7.0,
+    "line_thickness_px": 2.74,
+    "foreground_ratio": 0.3151,
+    "colors": [
+      {
+        "rgb": [
+          200,
+          168,
+          128
+        ],
+        "hex": "#c8a880"
+      },
+      {
+        "rgb": [
+          208,
+          168,
+          136
+        ],
+        "hex": "#d0a888"
+      },
+      {
+        "rgb": [
+          200,
+          168,
+          136
+        ],
+        "hex": "#c8a888"
+      },
+      {
+        "rgb": [
+          208,
+          168,
+          128
+        ],
+        "hex": "#d0a880"
+      },
+      {
+        "rgb": [
+          200,
+          160,
+          128
+        ],
+        "hex": "#c8a080"
+      },
+      {
+        "rgb": [
+          200,
+          160,
+          120
+        ],
+        "hex": "#c8a078"
+      },
+      {
+        "rgb": [
+          224,
+          208,
+          192
+        ],
+        "hex": "#e0d0c0"
+      },
+      {
+        "rgb": [
+          200,
+          168,
+          144
+        ],
+        "hex": "#c8a890"
+      }
+    ]
+  },
+  "gabor": {
+    "threshold": 42,
+    "close_size": 31,
+    "dilate_size": 11,
+    "min_bound_area": 1200
+  },
+  "bounds": [
+    {
+      "x": 52,
+      "y": 291,
+      "x1": 1379,
+      "y1": 751,
+      "width": 1327,
+      "height": 460,
+      "area_px": 600401.0,
+      "mean_gabor_response": 22.51
+    }
+  ]
+}
