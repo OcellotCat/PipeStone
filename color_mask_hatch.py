@@ -408,6 +408,16 @@ def find_inner_grid_bounds(
     return cells
 
 
+def bound_is_inside(inner: dict[str, object], outer: dict[str, object]) -> bool:
+    """Return True only when the complete inner rectangle is inside outer."""
+    return (
+        int(outer["x"]) <= int(inner["x"])
+        and int(outer["y"]) <= int(inner["y"])
+        and int(inner["x1"]) <= int(outer["x1"])
+        and int(inner["y1"]) <= int(outer["y1"])
+    )
+
+
 def _tesseract_text(image: np.ndarray, language: str, psm: int, whitelist: str = "") -> str:
     if shutil.which("tesseract") is None:
         return ""
@@ -457,7 +467,42 @@ def recognize_element_name(cell_rgb: np.ndarray, language: str) -> str:
     return f"{prefix}-{number}"
 
 
-def recognize_vertical_dimension(cell_rgb: np.ndarray) -> str:
+def _pick_dimension(candidates: list[str]) -> str:
+    if not candidates:
+        return ""
+    return max(set(candidates), key=lambda value: (candidates.count(value), len(value), value))
+
+
+def _read_dimension_candidates(crop_rgb: np.ndarray, rotate: bool, psm: int = 11) -> list[str]:
+    if crop_rgb.size == 0 or min(crop_rgb.shape[:2]) < 5:
+        return []
+    if rotate:
+        crop_rgb = cv2.rotate(crop_rgb, cv2.ROTATE_90_CLOCKWISE)
+    candidates: list[str] = []
+    for threshold in (110, 140, 170):
+        text = _tesseract_text(
+            _prepare_ocr_crop(crop_rgb, threshold, 4),
+            "eng",
+            psm,
+            whitelist="0123456789.,",
+        )
+        for token in re.findall(r"\d{2,5}(?:[.,]\d+)?", text):
+            normalized = token.strip()
+            # Element labels such as 1.01 and small anchor callouts are not
+            # cell dimensions. Dimensions must be whole numbers: candidates
+            # containing a decimal point or comma are rejected in full.
+            if re.fullmatch(r"\d{2,5}", normalized) and int(normalized) >= 100:
+                candidates.append(normalized)
+    return candidates
+
+
+def recognize_vertical_dimension(
+    cell_rgb: np.ndarray,
+    image_rgb: np.ndarray | None = None,
+    cell: dict[str, int] | None = None,
+    outer_bound: dict[str, object] | None = None,
+    allow_external: bool = True,
+) -> str:
     height, width = cell_rgb.shape[:2]
     strip_width = max(24, min(40, width // 8))
     candidates: list[str] = []
@@ -475,49 +520,123 @@ def recognize_vertical_dimension(cell_rgb: np.ndarray) -> str:
                 7,
                 whitelist="0123456789.,",
             )
-            normalized = text.replace(",", ".").strip(".")
-            if re.fullmatch(r"\d{2,5}(?:\.\d+)?", normalized):
+            normalized = text.strip()
+            if re.fullmatch(r"\d{2,5}", normalized):
                 candidates.append(normalized)
-    if not candidates:
+    inside_dimension = _pick_dimension(candidates)
+    if inside_dimension:
+        return inside_dimension
+
+    # Fallback for a vertical value placed elsewhere inside the cell.
+    whole_cell = _pick_dimension(_read_dimension_candidates(cell_rgb, rotate=True))
+    if whole_cell:
+        return whole_cell
+
+    if not allow_external or image_rgb is None or cell is None or outer_bound is None:
         return ""
-    # Repeated recognition across overlapping strips/thresholds is a useful
-    # confidence signal; prefer frequency, then a plausible longer number.
-    return max(set(candidates), key=lambda value: (candidates.count(value), len(value), value))
+
+    # If no vertical number is inside the cell, inspect dimension zones to the
+    # left and right. They may lie outside both the cell and the hatch-bound.
+    image_height, image_width = image_rgb.shape[:2]
+    search_width = max(60, int(outer_bound["width"]) // 3)
+    pad_y = max(2, int(cell["height"]) // 12)
+    top = max(0, int(cell["y"]) + pad_y)
+    bottom = min(image_height, int(cell["y1"]) - pad_y)
+    zones = [
+        image_rgb[top:bottom, max(0, int(cell["x"]) - search_width) : int(cell["x"])],
+        image_rgb[top:bottom, int(cell["x1"]) : min(image_width, int(cell["x1"]) + search_width)],
+        image_rgb[
+            max(0, int(outer_bound["y"]) - max(60, int(outer_bound["height"]) // 3)) : int(outer_bound["y"]),
+            int(cell["x"]) : int(cell["x1"]),
+        ],
+        image_rgb[
+            int(outer_bound["y1"]) : min(image_height, int(outer_bound["y1"]) + max(60, int(outer_bound["height"]) // 3)),
+            int(cell["x"]) : int(cell["x1"]),
+        ],
+    ]
+    external: list[str] = []
+    for zone in zones:
+        external.extend(_read_dimension_candidates(zone, rotate=True))
+    return _pick_dimension(external)
 
 
 def recognize_horizontal_dimension(
     image_rgb: np.ndarray,
     cell: dict[str, int],
     outer_bound: dict[str, object],
+    element: str = "",
 ) -> str:
     """Read the dimension line below an outer bound, aligned with a cell."""
     image_height, image_width = image_rgb.shape[:2]
+    outer_top = int(outer_bound["y"])
     outer_bottom = int(outer_bound["y1"])
     search_height = max(80, int(outer_bound["height"]) * 2 // 3)
     left = max(0, int(cell["x"]) + int(cell["width"]) // 12)
     right = min(image_width, int(cell["x1"]) - int(cell["width"]) // 12)
-    top = min(image_height, outer_bottom + 2)
-    bottom = min(image_height, outer_bottom + search_height)
-    if right <= left or bottom <= top:
+    if right <= left:
         return ""
 
-    crop = image_rgb[top:bottom, left:right]
-    candidates: list[str] = []
-    for threshold in (110, 140, 170):
-        text = _tesseract_text(
-            _prepare_ocr_crop(crop, threshold, 4),
-            "eng",
-            11,
-            whitelist="0123456789.,",
-        )
-        for token in re.findall(r"\d{2,5}(?:[.,]\d+)?", text):
-            normalized = token.replace(",", ".").strip(".")
-            # Small 5/10/25 callouts around anchors are not panel widths.
-            if float(normalized) >= 100:
-                candidates.append(normalized)
-    if not candidates:
-        return ""
-    return max(set(candidates), key=lambda value: (candidates.count(value), len(value), value))
+    # First inspect narrow bands immediately inside the upper/lower cell edge.
+    # This supports dimensions printed within the panel without scanning its
+    # central label area.
+    band_height = max(20, int(cell["height"]) // 3)
+    inside_zones = [
+        image_rgb[int(cell["y"]) : min(int(cell["y1"]), int(cell["y"]) + band_height), left:right],
+        image_rgb[max(int(cell["y"]), int(cell["y1"]) - band_height) : int(cell["y1"]), left:right],
+    ]
+    inside: list[str] = []
+    for zone in inside_zones:
+        inside.extend(_read_dimension_candidates(zone, rotate=False))
+    element_number = re.sub(r"\D", "", element.rsplit("-", 1)[-1]) if element else ""
+    if element_number:
+        inside = [value for value in inside if re.sub(r"\D", "", value) != element_number]
+    inside_dimension = _pick_dimension(inside)
+    if inside_dimension:
+        return inside_dimension
+
+    whole_cell = _read_dimension_candidates(
+        image_rgb[int(cell["y"]) : int(cell["y1"]), int(cell["x"]) : int(cell["x1"])],
+        rotate=False,
+    )
+    if element_number:
+        whole_cell = [value for value in whole_cell if re.sub(r"\D", "", value) != element_number]
+    whole_cell_dimension = _pick_dimension(whole_cell)
+    if whole_cell_dimension:
+        return whole_cell_dimension
+
+    # Otherwise search the conventional dimension zones below and above the
+    # whole hatch-bound, retaining X alignment with the current cell.
+    outside_zones = [
+        image_rgb[min(image_height, outer_bottom + 2) : min(image_height, outer_bottom + search_height), left:right],
+        image_rgb[max(0, outer_top - search_height) : max(0, outer_top - 2), left:right],
+        image_rgb[
+            int(cell["y"]) : int(cell["y1"]),
+            max(0, int(outer_bound["x"]) - max(60, int(outer_bound["width"]) // 3)) : int(outer_bound["x"]),
+        ],
+        image_rgb[
+            int(cell["y"]) : int(cell["y1"]),
+            int(outer_bound["x1"]) : min(image_width, int(outer_bound["x1"]) + max(60, int(outer_bound["width"]) // 3)),
+        ],
+    ]
+    outside: list[str] = []
+    for zone in outside_zones:
+        outside.extend(_read_dimension_candidates(zone, rotate=False))
+    if element_number:
+        outside = [value for value in outside if re.sub(r"\D", "", value) != element_number]
+    return _pick_dimension(outside)
+
+
+def dimensions_match_cell(horizontal: str, vertical: str, cell: dict[str, int], tolerance: float = 0.20) -> bool:
+    """Reject façade-wide dimensions by comparing X/Y drawing scales."""
+    if not re.fullmatch(r"\d+", horizontal) or not re.fullmatch(r"\d+", vertical):
+        return False
+    try:
+        horizontal_scale = float(horizontal) / max(1, int(cell["width"]))
+        vertical_scale = float(vertical) / max(1, int(cell["height"]))
+    except ValueError:
+        return False
+    difference = abs(horizontal_scale - vertical_scale) / max(horizontal_scale, vertical_scale)
+    return difference <= tolerance
 
 
 def analyze_labeled_inner_bounds(
@@ -527,12 +646,16 @@ def analyze_labeled_inner_bounds(
     min_cell_width: int,
     min_cell_height: int,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, dict[str, object]]]:
-    matches: list[dict[str, object]] = []
+    size_source_bounds: list[dict[str, object]] = []
     all_labeled_bounds: list[dict[str, object]] = []
     element_counts: Counter[str] = Counter()
     unique_elements: dict[str, dict[str, set[str]]] = {}
+    element_cells: dict[str, list[tuple[np.ndarray, dict[str, int], dict[str, object]]]] = {}
     for outer_index, outer_bound in enumerate(outer_bounds, start=1):
-        cells = find_inner_grid_bounds(image_rgb, outer_bound, min_cell_width, min_cell_height)
+        detected_cells = find_inner_grid_bounds(image_rgb, outer_bound, min_cell_width, min_cell_height)
+        # This is a hard OCR boundary: names from a cell extending even one
+        # pixel outside its hatch-bound must never enter the element registry.
+        cells = [cell for cell in detected_cells if bound_is_inside(cell, outer_bound)]
         recognized_names: list[str] = []
         for cell in cells:
             crop = image_rgb[cell["y"] : cell["y1"], cell["x"] : cell["x1"]]
@@ -553,31 +676,64 @@ def analyze_labeled_inner_bounds(
                         recognized_names[index] = dominant
 
         for cell, element in zip(cells, recognized_names):
-            if element:
-                labeled: dict[str, object] = dict(cell)
-                labeled.update({"outer_bound": outer_index, "element": element})
-                all_labeled_bounds.append(labeled)
-                element_counts[element] += 1
-
-            crop = image_rgb[cell["y"] : cell["y1"], cell["x"] : cell["x1"]]
-            dimension = recognize_vertical_dimension(crop)
-            if not element or not dimension:
+            if not element:
                 continue
-            horizontal_dimension = recognize_horizontal_dimension(image_rgb, cell, outer_bound)
-            match: dict[str, object] = dict(cell)
-            match.update(
+
+            labeled: dict[str, object] = dict(cell)
+            labeled.update({"outer_bound": outer_index, "element": element})
+            all_labeled_bounds.append(labeled)
+            element_counts[element] += 1
+            sizes = unique_elements.setdefault(element, {"vertical_dimensions": set(), "horizontal_dimensions": set()})
+            crop = image_rgb[cell["y"] : cell["y1"], cell["x"] : cell["x1"]]
+            element_cells.setdefault(element, []).append((crop, cell, outer_bound))
+
+            # Dimensions are auxiliary metadata. Try to read them only until a
+            # complete size has been obtained for this designation; all later
+            # occurrences merely increment the counter above.
+            size_is_known = bool(sizes["vertical_dimensions"] and sizes["horizontal_dimensions"])
+            if size_is_known:
+                continue
+            vertical_dimension = recognize_vertical_dimension(
+                crop,
+                image_rgb,
+                cell,
+                outer_bound,
+                allow_external=False,
+            )
+            horizontal_dimension = recognize_horizontal_dimension(image_rgb, cell, outer_bound, element)
+            if not vertical_dimension or not horizontal_dimension:
+                continue
+            if not dimensions_match_cell(horizontal_dimension, vertical_dimension, cell):
+                continue
+            sizes["vertical_dimensions"].add(vertical_dimension)
+            sizes["horizontal_dimensions"].add(horizontal_dimension)
+            size_source: dict[str, object] = dict(cell)
+            size_source.update(
                 {
                     "outer_bound": outer_index,
                     "element": element,
-                    "vertical_dimension": dimension,
+                    "vertical_dimension": vertical_dimension,
                     "horizontal_dimension": horizontal_dimension,
                 }
             )
-            matches.append(match)
-            sizes = unique_elements.setdefault(element, {"vertical_dimensions": set(), "horizontal_dimensions": set()})
-            sizes["vertical_dimensions"].add(dimension)
-            if horizontal_dimension:
-                sizes["horizontal_dimensions"].add(horizontal_dimension)
+            size_source_bounds.append(size_source)
+
+    # External vertical dimensions have lower priority because a façade-wide
+    # height beside a hatch-bound can overlap a cell row. Use them only when no
+    # instance of the designation supplied an internal vertical size.
+    for element, sizes in unique_elements.items():
+        if sizes["vertical_dimensions"]:
+            continue
+        for crop, cell, outer_bound in element_cells.get(element, []):
+            vertical_dimension = recognize_vertical_dimension(crop, image_rgb, cell, outer_bound, allow_external=True)
+            horizontal_dimension = recognize_horizontal_dimension(image_rgb, cell, outer_bound, element)
+            if not vertical_dimension or not horizontal_dimension:
+                continue
+            if not dimensions_match_cell(horizontal_dimension, vertical_dimension, cell):
+                continue
+            sizes["vertical_dimensions"].add(vertical_dimension)
+            sizes["horizontal_dimensions"].add(horizontal_dimension)
+            break
     serialized = {
         name: {
             "count": int(element_counts[name]),
@@ -592,19 +748,16 @@ def analyze_labeled_inner_bounds(
             name,
             {"count": int(count), "vertical_dimensions": [], "horizontal_dimensions": []},
         )
-    return matches, all_labeled_bounds, serialized
+    return size_source_bounds, all_labeled_bounds, serialized
 
 
-def draw_labeled_inner_bounds(image_rgb: np.ndarray, matches: list[dict[str, object]]) -> np.ndarray:
+def draw_labeled_inner_bounds(image_rgb: np.ndarray, labeled_bounds: list[dict[str, object]]) -> np.ndarray:
     annotated = image_rgb.copy()
-    for index, match in enumerate(matches, start=1):
-        x, y, x1, y1 = (int(match[key]) for key in ("x", "y", "x1", "y1"))
+    for index, bound in enumerate(labeled_bounds, start=1):
+        x, y, x1, y1 = (int(bound[key]) for key in ("x", "y", "x1", "y1"))
         cv2.rectangle(annotated, (x, y), (x1, y1), (220, 0, 220), 3)
-        # OpenCV's built-in font is ASCII-only; full Cyrillic names remain in
-        # the JSON while the image uses a stable index and dimension.
-        horizontal = str(match.get("horizontal_dimension", "?")) or "?"
-        label = f'{index}. {horizontal} x {match["vertical_dimension"]}'
-        cv2.putText(annotated, label, (x + 5, max(22, y - 7)), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (220, 0, 220), 2, cv2.LINE_AA)
+        # OpenCV's built-in font is ASCII-only; full names are stored in JSON.
+        cv2.putText(annotated, str(index), (x + 5, y + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (220, 0, 220), 2, cv2.LINE_AA)
     return annotated
 
 
@@ -618,8 +771,12 @@ def add_area_totals(unique_elements: dict[str, dict[str, object]]) -> float:
         area_m2: float | None = None
         if len(horizontal) == 1 and len(vertical) == 1 and count > 0:
             try:
-                width_mm = float(str(horizontal[0]))
-                height_mm = float(str(vertical[0]))
+                width_text = str(horizontal[0])
+                height_text = str(vertical[0])
+                if not re.fullmatch(r"\d+", width_text) or not re.fullmatch(r"\d+", height_text):
+                    raise ValueError("Cell dimensions must be integers")
+                width_mm = int(width_text)
+                height_mm = int(height_text)
                 area_m2 = width_mm * height_mm * count / (1000.0 * 1000.0)
             except ValueError:
                 area_m2 = None
@@ -641,12 +798,12 @@ def main() -> int:
     parser.add_argument(
         "--elements-output",
         default="test_tiled_elements.json",
-        help="JSON with inner bounds that contain an element name and a vertical dimension.",
+        help="JSON with every labeled inner bound, unique element counts, and available sizes.",
     )
     parser.add_argument(
         "--elements-image-output",
         default="test_tiled_elements.png",
-        help="Image highlighting inner bounds that contain a name and vertical dimension.",
+        help="Image highlighting every inner bound that contains an element name.",
     )
     parser.add_argument("--gabor-response-output", default="", help="Optional grayscale Gabor response output path.")
     parser.add_argument("--gabor-mask-output", default="", help="Optional grayscale Gabor match mask output path.")
@@ -715,7 +872,7 @@ def main() -> int:
     )
     bounds = find_match_bounds(gabor_mask, gabor_response, args.min_bound_area)
     annotated_rgb = draw_bounds(target_rgb, bounds)
-    labeled_bounds, all_labeled_bounds, unique_elements = analyze_labeled_inner_bounds(
+    size_source_bounds, all_labeled_bounds, unique_elements = analyze_labeled_inner_bounds(
         target_rgb,
         bounds,
         args.ocr_language,
@@ -723,7 +880,7 @@ def main() -> int:
         args.min_cell_height,
     )
     total_area_m2 = add_area_totals(unique_elements)
-    elements_annotated_rgb = draw_labeled_inner_bounds(target_rgb, labeled_bounds)
+    elements_annotated_rgb = draw_labeled_inner_bounds(target_rgb, all_labeled_bounds)
 
     hatch_definition_path = Path(args.hatch_definition_output)
     hatch_definition_path.parent.mkdir(parents=True, exist_ok=True)
@@ -747,10 +904,15 @@ def main() -> int:
 
     elements_result = {
         "target": str(target_path),
+        "labels_restricted_to_hatch_bounds": True,
+        "containment_verified": all(
+            bound_is_inside(bound, bounds[int(bound["outer_bound"]) - 1])
+            for bound in all_labeled_bounds
+        ),
         "unique_elements": unique_elements,
         "total_area_m2": total_area_m2,
         "all_labeled_inner_bounds": all_labeled_bounds,
-        "matching_inner_bounds": labeled_bounds,
+        "size_source_bounds": size_source_bounds,
     }
     elements_output_path = Path(args.elements_output)
     elements_output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -774,7 +936,7 @@ def main() -> int:
     print(f"Hatch spacing: {hatch_definition['spacing_px']} px")
     print(f"Matched pixels: {matched_pixels} / {total_pixels} ({matched_pixels / total_pixels:.2%})")
     print(f"Bounds found: {len(bounds)}")
-    print(f"Labeled inner bounds found: {len(labeled_bounds)}")
+    print(f"Labeled inner bounds found: {len(all_labeled_bounds)}")
     for element, dimensions in unique_elements.items():
         horizontal = ", ".join(dimensions["horizontal_dimensions"]) or "?"
         vertical = ", ".join(dimensions["vertical_dimensions"]) or "?"

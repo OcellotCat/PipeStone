@@ -1,7 +1,131 @@
 {
-  "target": "test_tiled.jpg",
+  "target": "test.jpg",
+  "labels_restricted_to_hatch_bounds": true,
+  "containment_verified": true,
   "unique_elements": {
+    "Spy-02": {
+      "count": 1,
+      "vertical_dimensions": [],
+      "horizontal_dimensions": [],
+      "total_area_m2": null
+    },
+    "Жр-1.04": {
+      "count": 1,
+      "vertical_dimensions": [
+        "465"
+      ],
+      "horizontal_dimensions": [
+        "1390"
+      ],
+      "total_area_m2": 0.646
+    },
+    "Кam-1.01": {
+      "count": 1,
+      "vertical_dimensions": [],
+      "horizontal_dimensions": [],
+      "total_area_m2": null
+    },
+    "Кcm-1.01": {
+      "count": 1,
+      "vertical_dimensions": [],
+      "horizontal_dimensions": [],
+      "total_area_m2": null
+    },
+    "Кcm-1.04": {
+      "count": 1,
+      "vertical_dimensions": [],
+      "horizontal_dimensions": [],
+      "total_area_m2": null
+    },
+    "Кcom-1.01": {
+      "count": 8,
+      "vertical_dimensions": [
+        "610"
+      ],
+      "horizontal_dimensions": [
+        "1390"
+      ],
+      "total_area_m2": 6.783
+    },
+    "Кcom-1.04": {
+      "count": 1,
+      "vertical_dimensions": [],
+      "horizontal_dimensions": [],
+      "total_area_m2": null
+    },
+    "Кcom-1.07": {
+      "count": 1,
+      "vertical_dimensions": [
+        "610"
+      ],
+      "horizontal_dimensions": [
+        "1390"
+      ],
+      "total_area_m2": 0.848
+    },
+    "Кom-1.01": {
+      "count": 2,
+      "vertical_dimensions": [
+        "610"
+      ],
+      "horizontal_dimensions": [
+        "1390"
+      ],
+      "total_area_m2": 1.696
+    },
+    "Кom-10": {
+      "count": 1,
+      "vertical_dimensions": [],
+      "horizontal_dimensions": [],
+      "total_area_m2": null
+    },
+    "Кs-7": {
+      "count": 1,
+      "vertical_dimensions": [],
+      "horizontal_dimensions": [],
+      "total_area_m2": null
+    },
     "Кр-1.01": {
+      "count": 38,
+      "vertical_dimensions": [
+        "800"
+      ],
+      "horizontal_dimensions": [
+        "1390"
+      ],
+      "total_area_m2": 42.256
+    },
+    "Кр-1.03": {
+      "count": 8,
+      "vertical_dimensions": [
+        "510"
+      ],
+      "horizontal_dimensions": [
+        "1390"
+      ],
+      "total_area_m2": 5.671
+    },
+    "Кр-1.04": {
+      "count": 5,
+      "vertical_dimensions": [
+        "800"
+      ],
+      "horizontal_dimensions": [
+        "1390"
+      ],
+      "total_area_m2": 5.56
+    },
+    "Кр-1.07": {
+      "count": 27,
+      "vertical_dimensions": [
+        "800"
+      ],
+      "horizontal_dimensions": [
+        "1390"
+      ],
+      "total_area_m2": 30.024
+    },
+    "Кр-10": {
       "count": 4,
       "vertical_dimensions": [
         "800"
@@ -11,169 +135,1263 @@
       ],
       "total_area_m2": 4.448
     },
-    "Кр-1.04": {
-      "count": 4,
+    "Кр-1020": {
+      "count": 1,
       "vertical_dimensions": [
-        "465"
+        "635"
       ],
       "horizontal_dimensions": [
         "1390"
       ],
-      "total_area_m2": 2.585
+      "total_area_m2": 0.883
     },
-    "Ксп-1.01": {
-      "count": 4,
+    "Кр-1047": {
+      "count": 1,
+      "vertical_dimensions": [],
+      "horizontal_dimensions": [],
+      "total_area_m2": null
+    },
+    "Кр-1067": {
+      "count": 1,
+      "vertical_dimensions": [],
+      "horizontal_dimensions": [],
+      "total_area_m2": null
+    },
+    "Ксп-1.0": {
+      "count": 1,
       "vertical_dimensions": [
         "610"
       ],
       "horizontal_dimensions": [
         "1390"
       ],
-      "total_area_m2": 3.392
+      "total_area_m2": 0.848
+    },
+    "Ксп-1.01": {
+      "count": 11,
+      "vertical_dimensions": [
+        "619"
+      ],
+      "horizontal_dimensions": [
+        "1390"
+      ],
+      "total_area_m2": 9.465
+    },
+    "Кут-1.01": {
+      "count": 1,
+      "vertical_dimensions": [],
+      "horizontal_dimensions": [],
+      "total_area_m2": null
+    },
+    "р-р-1": {
+      "count": 1,
+      "vertical_dimensions": [],
+      "horizontal_dimensions": [],
+      "total_area_m2": null
     }
   },
-  "total_area_m2": 10.425,
+  "total_area_m2": 109.128,
   "all_labeled_inner_bounds": [
     {
-      "x": 42,
-      "y": 82,
-      "x1": 376,
-      "y1": 195,
-      "width": 334,
-      "height": 113,
+      "x": 6560,
+      "y": 2950,
+      "x1": 6889,
+      "y1": 3139,
+      "width": 329,
+      "height": 189,
+      "outer_bound": 1,
+      "element": "Кр-10"
+    },
+    {
+      "x": 6229,
+      "y": 3139,
+      "x1": 6560,
+      "y1": 3331,
+      "width": 331,
+      "height": 192,
+      "outer_bound": 1,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 5896,
+      "y": 3331,
+      "x1": 6229,
+      "y1": 3521,
+      "width": 333,
+      "height": 190,
+      "outer_bound": 1,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 6229,
+      "y": 3331,
+      "x1": 6560,
+      "y1": 3521,
+      "width": 331,
+      "height": 190,
+      "outer_bound": 1,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 6560,
+      "y": 3331,
+      "x1": 6889,
+      "y1": 3521,
+      "width": 329,
+      "height": 190,
+      "outer_bound": 1,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 6889,
+      "y": 3331,
+      "x1": 7232,
+      "y1": 3521,
+      "width": 343,
+      "height": 190,
+      "outer_bound": 1,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 5896,
+      "y": 3521,
+      "x1": 6229,
+      "y1": 3711,
+      "width": 333,
+      "height": 190,
+      "outer_bound": 1,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 6229,
+      "y": 3521,
+      "x1": 6560,
+      "y1": 3711,
+      "width": 331,
+      "height": 190,
+      "outer_bound": 1,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 6560,
+      "y": 3521,
+      "x1": 6889,
+      "y1": 3711,
+      "width": 329,
+      "height": 190,
+      "outer_bound": 1,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 6889,
+      "y": 3521,
+      "x1": 7232,
+      "y1": 3711,
+      "width": 343,
+      "height": 190,
+      "outer_bound": 1,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 6229,
+      "y": 3711,
+      "x1": 6560,
+      "y1": 3901,
+      "width": 331,
+      "height": 190,
       "outer_bound": 1,
       "element": "Кр-1.04"
     },
     {
-      "x": 376,
-      "y": 82,
-      "x1": 704,
-      "y1": 195,
+      "x": 6560,
+      "y": 3711,
+      "x1": 6889,
+      "y1": 3901,
+      "width": 329,
+      "height": 190,
+      "outer_bound": 1,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 6889,
+      "y": 3711,
+      "x1": 7232,
+      "y1": 3901,
+      "width": 343,
+      "height": 190,
+      "outer_bound": 1,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 5896,
+      "y": 3901,
+      "x1": 6229,
+      "y1": 4048,
+      "width": 333,
+      "height": 147,
+      "outer_bound": 1,
+      "element": "Кcom-1.01"
+    },
+    {
+      "x": 6229,
+      "y": 3901,
+      "x1": 6560,
+      "y1": 4048,
+      "width": 331,
+      "height": 147,
+      "outer_bound": 1,
+      "element": "Кcom-1.01"
+    },
+    {
+      "x": 6560,
+      "y": 3901,
+      "x1": 6889,
+      "y1": 4048,
+      "width": 329,
+      "height": 147,
+      "outer_bound": 1,
+      "element": "Кcom-1.01"
+    },
+    {
+      "x": 6889,
+      "y": 3901,
+      "x1": 7232,
+      "y1": 4048,
+      "width": 343,
+      "height": 147,
+      "outer_bound": 1,
+      "element": "Кcom-1.01"
+    },
+    {
+      "x": 1119,
+      "y": 544,
+      "x1": 1452,
+      "y1": 737,
+      "width": 333,
+      "height": 193,
+      "outer_bound": 2,
+      "element": "Кs-7"
+    },
+    {
+      "x": 1782,
+      "y": 544,
+      "x1": 2113,
+      "y1": 737,
+      "width": 331,
+      "height": 193,
+      "outer_bound": 2,
+      "element": "Кр-10"
+    },
+    {
+      "x": 1119,
+      "y": 927,
+      "x1": 1452,
+      "y1": 1118,
+      "width": 333,
+      "height": 191,
+      "outer_bound": 2,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 1452,
+      "y": 927,
+      "x1": 1782,
+      "y1": 1118,
+      "width": 330,
+      "height": 191,
+      "outer_bound": 2,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 1782,
+      "y": 927,
+      "x1": 2113,
+      "y1": 1118,
+      "width": 331,
+      "height": 191,
+      "outer_bound": 2,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 2113,
+      "y": 927,
+      "x1": 2446,
+      "y1": 1118,
+      "width": 333,
+      "height": 191,
+      "outer_bound": 2,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 1119,
+      "y": 1118,
+      "x1": 1452,
+      "y1": 1308,
+      "width": 333,
+      "height": 190,
+      "outer_bound": 2,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 1452,
+      "y": 1118,
+      "x1": 1782,
+      "y1": 1308,
+      "width": 330,
+      "height": 190,
+      "outer_bound": 2,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 1782,
+      "y": 1118,
+      "x1": 2113,
+      "y1": 1308,
+      "width": 331,
+      "height": 190,
+      "outer_bound": 2,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 2113,
+      "y": 1118,
+      "x1": 2446,
+      "y1": 1308,
+      "width": 333,
+      "height": 190,
+      "outer_bound": 2,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 1119,
+      "y": 1308,
+      "x1": 1452,
+      "y1": 1499,
+      "width": 333,
+      "height": 191,
+      "outer_bound": 2,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 1452,
+      "y": 1308,
+      "x1": 1782,
+      "y1": 1499,
+      "width": 330,
+      "height": 191,
+      "outer_bound": 2,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 1782,
+      "y": 1308,
+      "x1": 2113,
+      "y1": 1499,
+      "width": 331,
+      "height": 191,
+      "outer_bound": 2,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 2113,
+      "y": 1308,
+      "x1": 2446,
+      "y1": 1499,
+      "width": 333,
+      "height": 191,
+      "outer_bound": 2,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 1119,
+      "y": 1499,
+      "x1": 1452,
+      "y1": 1646,
+      "width": 333,
+      "height": 147,
+      "outer_bound": 2,
+      "element": "Ксп-1.01"
+    },
+    {
+      "x": 1452,
+      "y": 1499,
+      "x1": 1782,
+      "y1": 1646,
+      "width": 330,
+      "height": 147,
+      "outer_bound": 2,
+      "element": "Ксп-1.01"
+    },
+    {
+      "x": 1782,
+      "y": 1499,
+      "x1": 2113,
+      "y1": 1646,
+      "width": 331,
+      "height": 147,
+      "outer_bound": 2,
+      "element": "Ксп-1.01"
+    },
+    {
+      "x": 2113,
+      "y": 1499,
+      "x1": 2446,
+      "y1": 1646,
+      "width": 333,
+      "height": 147,
+      "outer_bound": 2,
+      "element": "Ксп-1.01"
+    },
+    {
+      "x": 3152,
+      "y": 765,
+      "x1": 3481,
+      "y1": 928,
+      "width": 329,
+      "height": 163,
+      "outer_bound": 3,
+      "element": "Кр-1020"
+    },
+    {
+      "x": 3481,
+      "y": 765,
+      "x1": 3822,
+      "y1": 928,
+      "width": 341,
+      "height": 163,
+      "outer_bound": 3,
+      "element": "Кр-10"
+    },
+    {
+      "x": 2489,
+      "y": 1119,
+      "x1": 2822,
+      "y1": 1308,
+      "width": 333,
+      "height": 189,
+      "outer_bound": 3,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 2822,
+      "y": 1119,
+      "x1": 3152,
+      "y1": 1308,
+      "width": 330,
+      "height": 189,
+      "outer_bound": 3,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 3152,
+      "y": 1119,
+      "x1": 3481,
+      "y1": 1308,
+      "width": 329,
+      "height": 189,
+      "outer_bound": 3,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 3481,
+      "y": 1119,
+      "x1": 3822,
+      "y1": 1308,
+      "width": 341,
+      "height": 189,
+      "outer_bound": 3,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 2489,
+      "y": 1308,
+      "x1": 2822,
+      "y1": 1499,
+      "width": 333,
+      "height": 191,
+      "outer_bound": 3,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 2822,
+      "y": 1308,
+      "x1": 3152,
+      "y1": 1499,
+      "width": 330,
+      "height": 191,
+      "outer_bound": 3,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 3152,
+      "y": 1308,
+      "x1": 3481,
+      "y1": 1499,
+      "width": 329,
+      "height": 191,
+      "outer_bound": 3,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 3481,
+      "y": 1308,
+      "x1": 3822,
+      "y1": 1499,
+      "width": 341,
+      "height": 191,
+      "outer_bound": 3,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 2822,
+      "y": 1499,
+      "x1": 3152,
+      "y1": 1643,
+      "width": 330,
+      "height": 144,
+      "outer_bound": 3,
+      "element": "Ксп-1.01"
+    },
+    {
+      "x": 3152,
+      "y": 1499,
+      "x1": 3481,
+      "y1": 1643,
+      "width": 329,
+      "height": 144,
+      "outer_bound": 3,
+      "element": "Кcom-1.01"
+    },
+    {
+      "x": 3481,
+      "y": 1499,
+      "x1": 3822,
+      "y1": 1643,
+      "width": 341,
+      "height": 144,
+      "outer_bound": 3,
+      "element": "Кcm-1.04"
+    },
+    {
+      "x": 4526,
+      "y": 3167,
+      "x1": 4859,
+      "y1": 3331,
+      "width": 333,
+      "height": 164,
+      "outer_bound": 4,
+      "element": "Spy-02"
+    },
+    {
+      "x": 4859,
+      "y": 3167,
+      "x1": 5190,
+      "y1": 3331,
+      "width": 331,
+      "height": 164,
+      "outer_bound": 4,
+      "element": "Кр-10"
+    },
+    {
+      "x": 5190,
+      "y": 3167,
+      "x1": 5518,
+      "y1": 3331,
       "width": 328,
-      "height": 113,
-      "outer_bound": 1,
-      "element": "Кр-1.04"
+      "height": 164,
+      "outer_bound": 4,
+      "element": "р-р-1"
     },
     {
-      "x": 704,
-      "y": 82,
-      "x1": 1034,
-      "y1": 195,
+      "x": 5518,
+      "y": 3167,
+      "x1": 5852,
+      "y1": 3331,
+      "width": 334,
+      "height": 164,
+      "outer_bound": 4,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 4526,
+      "y": 3521,
+      "x1": 4859,
+      "y1": 3711,
+      "width": 333,
+      "height": 190,
+      "outer_bound": 4,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 4859,
+      "y": 3521,
+      "x1": 5190,
+      "y1": 3711,
+      "width": 331,
+      "height": 190,
+      "outer_bound": 4,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 5190,
+      "y": 3521,
+      "x1": 5518,
+      "y1": 3711,
+      "width": 328,
+      "height": 190,
+      "outer_bound": 4,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 5518,
+      "y": 3521,
+      "x1": 5852,
+      "y1": 3711,
+      "width": 334,
+      "height": 190,
+      "outer_bound": 4,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 4526,
+      "y": 3711,
+      "x1": 4859,
+      "y1": 3901,
+      "width": 333,
+      "height": 190,
+      "outer_bound": 4,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 4859,
+      "y": 3711,
+      "x1": 5190,
+      "y1": 3901,
+      "width": 331,
+      "height": 190,
+      "outer_bound": 4,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 5190,
+      "y": 3711,
+      "x1": 5518,
+      "y1": 3901,
+      "width": 328,
+      "height": 190,
+      "outer_bound": 4,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 5518,
+      "y": 3711,
+      "x1": 5852,
+      "y1": 3901,
+      "width": 334,
+      "height": 190,
+      "outer_bound": 4,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 4526,
+      "y": 3901,
+      "x1": 4859,
+      "y1": 4048,
+      "width": 333,
+      "height": 147,
+      "outer_bound": 4,
+      "element": "Кam-1.01"
+    },
+    {
+      "x": 4859,
+      "y": 3901,
+      "x1": 5190,
+      "y1": 4048,
+      "width": 331,
+      "height": 147,
+      "outer_bound": 4,
+      "element": "Кcom-1.01"
+    },
+    {
+      "x": 5190,
+      "y": 3901,
+      "x1": 5518,
+      "y1": 4048,
+      "width": 328,
+      "height": 147,
+      "outer_bound": 4,
+      "element": "Кom-1.01"
+    },
+    {
+      "x": 5518,
+      "y": 3901,
+      "x1": 5852,
+      "y1": 4048,
+      "width": 334,
+      "height": 147,
+      "outer_bound": 4,
+      "element": "Кcm-1.01"
+    },
+    {
+      "x": 3155,
+      "y": 3381,
+      "x1": 3489,
+      "y1": 3521,
+      "width": 334,
+      "height": 140,
+      "outer_bound": 5,
+      "element": "Кр-1.03"
+    },
+    {
+      "x": 3489,
+      "y": 3381,
+      "x1": 3818,
+      "y1": 3521,
+      "width": 329,
+      "height": 140,
+      "outer_bound": 5,
+      "element": "Кр-1.03"
+    },
+    {
+      "x": 3818,
+      "y": 3381,
+      "x1": 4149,
+      "y1": 3521,
+      "width": 331,
+      "height": 140,
+      "outer_bound": 5,
+      "element": "Кр-1.03"
+    },
+    {
+      "x": 4149,
+      "y": 3381,
+      "x1": 4482,
+      "y1": 3521,
+      "width": 333,
+      "height": 140,
+      "outer_bound": 5,
+      "element": "Кр-1.03"
+    },
+    {
+      "x": 3155,
+      "y": 3521,
+      "x1": 3489,
+      "y1": 3711,
+      "width": 334,
+      "height": 190,
+      "outer_bound": 5,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 3489,
+      "y": 3521,
+      "x1": 3818,
+      "y1": 3711,
+      "width": 329,
+      "height": 190,
+      "outer_bound": 5,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 3818,
+      "y": 3521,
+      "x1": 4149,
+      "y1": 3711,
+      "width": 331,
+      "height": 190,
+      "outer_bound": 5,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 4149,
+      "y": 3521,
+      "x1": 4482,
+      "y1": 3711,
+      "width": 333,
+      "height": 190,
+      "outer_bound": 5,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 3155,
+      "y": 3711,
+      "x1": 3489,
+      "y1": 3900,
+      "width": 334,
+      "height": 189,
+      "outer_bound": 5,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 3489,
+      "y": 3711,
+      "x1": 3818,
+      "y1": 3900,
+      "width": 329,
+      "height": 189,
+      "outer_bound": 5,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 3818,
+      "y": 3711,
+      "x1": 4149,
+      "y1": 3900,
+      "width": 331,
+      "height": 189,
+      "outer_bound": 5,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 4149,
+      "y": 3711,
+      "x1": 4482,
+      "y1": 3900,
+      "width": 333,
+      "height": 189,
+      "outer_bound": 5,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 3155,
+      "y": 3900,
+      "x1": 3489,
+      "y1": 4048,
+      "width": 334,
+      "height": 148,
+      "outer_bound": 5,
+      "element": "Кут-1.01"
+    },
+    {
+      "x": 3489,
+      "y": 3900,
+      "x1": 3818,
+      "y1": 4048,
+      "width": 329,
+      "height": 148,
+      "outer_bound": 5,
+      "element": "Ксп-1.01"
+    },
+    {
+      "x": 3818,
+      "y": 3900,
+      "x1": 4149,
+      "y1": 4048,
+      "width": 331,
+      "height": 148,
+      "outer_bound": 5,
+      "element": "Кom-1.01"
+    },
+    {
+      "x": 4149,
+      "y": 3900,
+      "x1": 4482,
+      "y1": 4048,
+      "width": 333,
+      "height": 148,
+      "outer_bound": 5,
+      "element": "Кcom-1.01"
+    },
+    {
+      "x": 3860,
+      "y": 979,
+      "x1": 4192,
+      "y1": 1117,
+      "width": 332,
+      "height": 138,
+      "outer_bound": 6,
+      "element": "Кр-1.03"
+    },
+    {
+      "x": 4192,
+      "y": 979,
+      "x1": 4522,
+      "y1": 1117,
+      "width": 330,
+      "height": 138,
+      "outer_bound": 6,
+      "element": "Кр-1.03"
+    },
+    {
+      "x": 4522,
+      "y": 979,
+      "x1": 4851,
+      "y1": 1117,
+      "width": 329,
+      "height": 138,
+      "outer_bound": 6,
+      "element": "Кр-1.03"
+    },
+    {
+      "x": 4851,
+      "y": 979,
+      "x1": 5186,
+      "y1": 1117,
+      "width": 335,
+      "height": 138,
+      "outer_bound": 6,
+      "element": "Кр-1.03"
+    },
+    {
+      "x": 3860,
+      "y": 1117,
+      "x1": 4192,
+      "y1": 1308,
+      "width": 332,
+      "height": 191,
+      "outer_bound": 6,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 4192,
+      "y": 1117,
+      "x1": 4522,
+      "y1": 1308,
+      "width": 330,
+      "height": 191,
+      "outer_bound": 6,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 4522,
+      "y": 1117,
+      "x1": 4851,
+      "y1": 1308,
+      "width": 329,
+      "height": 191,
+      "outer_bound": 6,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 4851,
+      "y": 1117,
+      "x1": 5186,
+      "y1": 1308,
+      "width": 335,
+      "height": 191,
+      "outer_bound": 6,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 3860,
+      "y": 1308,
+      "x1": 4192,
+      "y1": 1499,
+      "width": 332,
+      "height": 191,
+      "outer_bound": 6,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 4192,
+      "y": 1308,
+      "x1": 4522,
+      "y1": 1499,
+      "width": 330,
+      "height": 191,
+      "outer_bound": 6,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 4522,
+      "y": 1308,
+      "x1": 4851,
+      "y1": 1499,
+      "width": 329,
+      "height": 191,
+      "outer_bound": 6,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 4851,
+      "y": 1308,
+      "x1": 5186,
+      "y1": 1499,
+      "width": 335,
+      "height": 191,
+      "outer_bound": 6,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 4522,
+      "y": 1499,
+      "x1": 4851,
+      "y1": 1646,
+      "width": 329,
+      "height": 147,
+      "outer_bound": 6,
+      "element": "Кcom-1.01"
+    },
+    {
+      "x": 4851,
+      "y": 1499,
+      "x1": 5186,
+      "y1": 1646,
+      "width": 335,
+      "height": 147,
+      "outer_bound": 6,
+      "element": "Кcom-1.04"
+    },
+    {
+      "x": 5230,
+      "y": 1194,
+      "x1": 5563,
+      "y1": 1307,
+      "width": 333,
+      "height": 113,
+      "outer_bound": 7,
+      "element": "Жр-1.04"
+    },
+    {
+      "x": 5563,
+      "y": 1194,
+      "x1": 5892,
+      "y1": 1307,
+      "width": 329,
+      "height": 113,
+      "outer_bound": 7,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 5892,
+      "y": 1194,
+      "x1": 6222,
+      "y1": 1307,
       "width": 330,
       "height": 113,
-      "outer_bound": 1,
-      "element": "Кр-1.04"
+      "outer_bound": 7,
+      "element": "Кр-1047"
     },
     {
-      "x": 1034,
-      "y": 82,
-      "x1": 1368,
-      "y1": 195,
+      "x": 6222,
+      "y": 1194,
+      "x1": 6556,
+      "y1": 1307,
       "width": 334,
       "height": 113,
-      "outer_bound": 1,
+      "outer_bound": 7,
+      "element": "Кр-1067"
+    },
+    {
+      "x": 5230,
+      "y": 1307,
+      "x1": 5563,
+      "y1": 1499,
+      "width": 333,
+      "height": 192,
+      "outer_bound": 7,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 5563,
+      "y": 1307,
+      "x1": 5892,
+      "y1": 1499,
+      "width": 329,
+      "height": 192,
+      "outer_bound": 7,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 5892,
+      "y": 1307,
+      "x1": 6222,
+      "y1": 1499,
+      "width": 330,
+      "height": 192,
+      "outer_bound": 7,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 6222,
+      "y": 1307,
+      "x1": 6556,
+      "y1": 1499,
+      "width": 334,
+      "height": 192,
+      "outer_bound": 7,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 5230,
+      "y": 1499,
+      "x1": 5563,
+      "y1": 1643,
+      "width": 333,
+      "height": 144,
+      "outer_bound": 7,
+      "element": "Ксп-1.01"
+    },
+    {
+      "x": 5563,
+      "y": 1499,
+      "x1": 5892,
+      "y1": 1643,
+      "width": 329,
+      "height": 144,
+      "outer_bound": 7,
+      "element": "Ксп-1.01"
+    },
+    {
+      "x": 5892,
+      "y": 1499,
+      "x1": 6222,
+      "y1": 1643,
+      "width": 330,
+      "height": 144,
+      "outer_bound": 7,
+      "element": "Ксп-1.01"
+    },
+    {
+      "x": 6222,
+      "y": 1499,
+      "x1": 6556,
+      "y1": 1643,
+      "width": 334,
+      "height": 144,
+      "outer_bound": 7,
+      "element": "Ксп-1.01"
+    },
+    {
+      "x": 1785,
+      "y": 3600,
+      "x1": 2118,
+      "y1": 3710,
+      "width": 333,
+      "height": 110,
+      "outer_bound": 8,
       "element": "Кр-1.04"
     },
     {
-      "x": 42,
-      "y": 195,
-      "x1": 376,
-      "y1": 385,
+      "x": 2118,
+      "y": 3600,
+      "x1": 2449,
+      "y1": 3710,
+      "width": 331,
+      "height": 110,
+      "outer_bound": 8,
+      "element": "Кр-1.04"
+    },
+    {
+      "x": 2449,
+      "y": 3600,
+      "x1": 2778,
+      "y1": 3710,
+      "width": 329,
+      "height": 110,
+      "outer_bound": 8,
+      "element": "Кр-1.04"
+    },
+    {
+      "x": 2778,
+      "y": 3600,
+      "x1": 3112,
+      "y1": 3710,
       "width": 334,
-      "height": 190,
-      "outer_bound": 1,
+      "height": 110,
+      "outer_bound": 8,
+      "element": "Кр-1.04"
+    },
+    {
+      "x": 1785,
+      "y": 3710,
+      "x1": 2118,
+      "y1": 3901,
+      "width": 333,
+      "height": 191,
+      "outer_bound": 8,
       "element": "Кр-1.01"
     },
     {
-      "x": 376,
-      "y": 195,
-      "x1": 704,
-      "y1": 385,
-      "width": 328,
-      "height": 190,
-      "outer_bound": 1,
+      "x": 2118,
+      "y": 3710,
+      "x1": 2449,
+      "y1": 3901,
+      "width": 331,
+      "height": 191,
+      "outer_bound": 8,
       "element": "Кр-1.01"
     },
     {
-      "x": 704,
-      "y": 195,
-      "x1": 1034,
-      "y1": 385,
-      "width": 330,
-      "height": 190,
-      "outer_bound": 1,
+      "x": 2449,
+      "y": 3710,
+      "x1": 2778,
+      "y1": 3901,
+      "width": 329,
+      "height": 191,
+      "outer_bound": 8,
       "element": "Кр-1.01"
     },
     {
-      "x": 1034,
-      "y": 195,
-      "x1": 1368,
-      "y1": 385,
+      "x": 2778,
+      "y": 3710,
+      "x1": 3112,
+      "y1": 3901,
       "width": 334,
-      "height": 190,
-      "outer_bound": 1,
+      "height": 191,
+      "outer_bound": 8,
       "element": "Кр-1.01"
     },
     {
-      "x": 42,
-      "y": 385,
-      "x1": 376,
-      "y1": 531,
+      "x": 1785,
+      "y": 3901,
+      "x1": 2118,
+      "y1": 4048,
+      "width": 333,
+      "height": 147,
+      "outer_bound": 8,
+      "element": "Ксп-1.01"
+    },
+    {
+      "x": 2118,
+      "y": 3901,
+      "x1": 2449,
+      "y1": 4048,
+      "width": 331,
+      "height": 147,
+      "outer_bound": 8,
+      "element": "Кcom-1.07"
+    },
+    {
+      "x": 2449,
+      "y": 3901,
+      "x1": 2778,
+      "y1": 4048,
+      "width": 329,
+      "height": 147,
+      "outer_bound": 8,
+      "element": "Кom-10"
+    },
+    {
+      "x": 2778,
+      "y": 3901,
+      "x1": 3112,
+      "y1": 4048,
       "width": 334,
-      "height": 146,
-      "outer_bound": 1,
-      "element": "Ксп-1.01"
-    },
-    {
-      "x": 376,
-      "y": 385,
-      "x1": 704,
-      "y1": 531,
-      "width": 328,
-      "height": 146,
-      "outer_bound": 1,
-      "element": "Ксп-1.01"
-    },
-    {
-      "x": 704,
-      "y": 385,
-      "x1": 1034,
-      "y1": 531,
-      "width": 330,
-      "height": 146,
-      "outer_bound": 1,
-      "element": "Ксп-1.01"
-    },
-    {
-      "x": 1034,
-      "y": 385,
-      "x1": 1368,
-      "y1": 531,
-      "width": 334,
-      "height": 146,
-      "outer_bound": 1,
-      "element": "Ксп-1.01"
+      "height": 147,
+      "outer_bound": 8,
+      "element": "Ксп-1.0"
     }
   ],
-  "matching_inner_bounds": [
+  "size_source_bounds": [
     {
-      "x": 376,
-      "y": 82,
-      "x1": 704,
-      "y1": 195,
-      "width": 328,
-      "height": 113,
+      "x": 6560,
+      "y": 3331,
+      "x1": 6889,
+      "y1": 3521,
+      "width": 329,
+      "height": 190,
       "outer_bound": 1,
-      "element": "Кр-1.04",
-      "vertical_dimension": "465",
+      "element": "Кр-1.07",
+      "vertical_dimension": "800",
       "horizontal_dimension": "1390"
     },
     {
-      "x": 376,
-      "y": 195,
-      "x1": 704,
-      "y1": 385,
-      "width": 328,
+      "x": 6560,
+      "y": 3521,
+      "x1": 6889,
+      "y1": 3711,
+      "width": 329,
       "height": 190,
       "outer_bound": 1,
       "element": "Кр-1.01",
@@ -181,14 +1399,26 @@
       "horizontal_dimension": "1390"
     },
     {
-      "x": 376,
-      "y": 385,
-      "x1": 704,
-      "y1": 531,
-      "width": 328,
-      "height": 146,
-      "outer_bound": 1,
+      "x": 1452,
+      "y": 1499,
+      "x1": 1782,
+      "y1": 1646,
+      "width": 330,
+      "height": 147,
+      "outer_bound": 2,
       "element": "Ксп-1.01",
+      "vertical_dimension": "619",
+      "horizontal_dimension": "1390"
+    },
+    {
+      "x": 5190,
+      "y": 3901,
+      "x1": 5518,
+      "y1": 4048,
+      "width": 328,
+      "height": 147,
+      "outer_bound": 4,
+      "element": "Кom-1.01",
       "vertical_dimension": "610",
       "horizontal_dimension": "1390"
     }
