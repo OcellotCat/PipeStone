@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 import math
 import re
@@ -484,28 +485,114 @@ def recognize_vertical_dimension(cell_rgb: np.ndarray) -> str:
     return max(set(candidates), key=lambda value: (candidates.count(value), len(value), value))
 
 
+def recognize_horizontal_dimension(
+    image_rgb: np.ndarray,
+    cell: dict[str, int],
+    outer_bound: dict[str, object],
+) -> str:
+    """Read the dimension line below an outer bound, aligned with a cell."""
+    image_height, image_width = image_rgb.shape[:2]
+    outer_bottom = int(outer_bound["y1"])
+    search_height = max(80, int(outer_bound["height"]) * 2 // 3)
+    left = max(0, int(cell["x"]) + int(cell["width"]) // 12)
+    right = min(image_width, int(cell["x1"]) - int(cell["width"]) // 12)
+    top = min(image_height, outer_bottom + 2)
+    bottom = min(image_height, outer_bottom + search_height)
+    if right <= left or bottom <= top:
+        return ""
+
+    crop = image_rgb[top:bottom, left:right]
+    candidates: list[str] = []
+    for threshold in (110, 140, 170):
+        text = _tesseract_text(
+            _prepare_ocr_crop(crop, threshold, 4),
+            "eng",
+            11,
+            whitelist="0123456789.,",
+        )
+        for token in re.findall(r"\d{2,5}(?:[.,]\d+)?", text):
+            normalized = token.replace(",", ".").strip(".")
+            # Small 5/10/25 callouts around anchors are not panel widths.
+            if float(normalized) >= 100:
+                candidates.append(normalized)
+    if not candidates:
+        return ""
+    return max(set(candidates), key=lambda value: (candidates.count(value), len(value), value))
+
+
 def analyze_labeled_inner_bounds(
     image_rgb: np.ndarray,
     outer_bounds: list[dict[str, object]],
     ocr_language: str,
     min_cell_width: int,
     min_cell_height: int,
-) -> tuple[list[dict[str, object]], dict[str, list[str]]]:
+) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, dict[str, object]]]:
     matches: list[dict[str, object]] = []
-    unique_elements: dict[str, set[str]] = {}
+    all_labeled_bounds: list[dict[str, object]] = []
+    element_counts: Counter[str] = Counter()
+    unique_elements: dict[str, dict[str, set[str]]] = {}
     for outer_index, outer_bound in enumerate(outer_bounds, start=1):
         cells = find_inner_grid_bounds(image_rgb, outer_bound, min_cell_width, min_cell_height)
+        recognized_names: list[str] = []
         for cell in cells:
             crop = image_rgb[cell["y"] : cell["y1"], cell["x"] : cell["x1"]]
-            element = recognize_element_name(crop, ocr_language)
+            recognized_names.append(recognize_element_name(crop, ocr_language))
+
+        # Repeated panels in one horizontal band have the same designation.
+        # Majority voting repairs a missed or partly obscured OCR result without
+        # merging different rows or different outer bounds.
+        row_indices: dict[tuple[int, int], list[int]] = {}
+        for index, cell in enumerate(cells):
+            row_indices.setdefault((cell["y"], cell["height"]), []).append(index)
+        for indices in row_indices.values():
+            votes = Counter(recognized_names[index] for index in indices if recognized_names[index])
+            if votes:
+                dominant, vote_count = votes.most_common(1)[0]
+                if vote_count >= 2:
+                    for index in indices:
+                        recognized_names[index] = dominant
+
+        for cell, element in zip(cells, recognized_names):
+            if element:
+                labeled: dict[str, object] = dict(cell)
+                labeled.update({"outer_bound": outer_index, "element": element})
+                all_labeled_bounds.append(labeled)
+                element_counts[element] += 1
+
+            crop = image_rgb[cell["y"] : cell["y1"], cell["x"] : cell["x1"]]
             dimension = recognize_vertical_dimension(crop)
             if not element or not dimension:
                 continue
+            horizontal_dimension = recognize_horizontal_dimension(image_rgb, cell, outer_bound)
             match: dict[str, object] = dict(cell)
-            match.update({"outer_bound": outer_index, "element": element, "vertical_dimension": dimension})
+            match.update(
+                {
+                    "outer_bound": outer_index,
+                    "element": element,
+                    "vertical_dimension": dimension,
+                    "horizontal_dimension": horizontal_dimension,
+                }
+            )
             matches.append(match)
-            unique_elements.setdefault(element, set()).add(dimension)
-    return matches, {name: sorted(values) for name, values in sorted(unique_elements.items())}
+            sizes = unique_elements.setdefault(element, {"vertical_dimensions": set(), "horizontal_dimensions": set()})
+            sizes["vertical_dimensions"].add(dimension)
+            if horizontal_dimension:
+                sizes["horizontal_dimensions"].add(horizontal_dimension)
+    serialized = {
+        name: {
+            "count": int(element_counts[name]),
+            "vertical_dimensions": sorted(values["vertical_dimensions"]),
+            "horizontal_dimensions": sorted(values["horizontal_dimensions"]),
+        }
+        for name, values in sorted(unique_elements.items())
+    }
+    # Include designations without a dimension callout as well.
+    for name, count in sorted(element_counts.items()):
+        serialized.setdefault(
+            name,
+            {"count": int(count), "vertical_dimensions": [], "horizontal_dimensions": []},
+        )
+    return matches, all_labeled_bounds, serialized
 
 
 def draw_labeled_inner_bounds(image_rgb: np.ndarray, matches: list[dict[str, object]]) -> np.ndarray:
@@ -515,9 +602,31 @@ def draw_labeled_inner_bounds(image_rgb: np.ndarray, matches: list[dict[str, obj
         cv2.rectangle(annotated, (x, y), (x1, y1), (220, 0, 220), 3)
         # OpenCV's built-in font is ASCII-only; full Cyrillic names remain in
         # the JSON while the image uses a stable index and dimension.
-        label = f'{index}. {match["vertical_dimension"]}'
+        horizontal = str(match.get("horizontal_dimension", "?")) or "?"
+        label = f'{index}. {horizontal} x {match["vertical_dimension"]}'
         cv2.putText(annotated, label, (x + 5, max(22, y - 7)), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (220, 0, 220), 2, cv2.LINE_AA)
     return annotated
+
+
+def add_area_totals(unique_elements: dict[str, dict[str, object]]) -> float:
+    """Add element areas in m² and return the total across all elements."""
+    total_area_m2 = 0.0
+    for values in unique_elements.values():
+        horizontal = values.get("horizontal_dimensions", [])
+        vertical = values.get("vertical_dimensions", [])
+        count = int(values.get("count", 0))
+        area_m2: float | None = None
+        if len(horizontal) == 1 and len(vertical) == 1 and count > 0:
+            try:
+                width_mm = float(str(horizontal[0]))
+                height_mm = float(str(vertical[0]))
+                area_m2 = width_mm * height_mm * count / (1000.0 * 1000.0)
+            except ValueError:
+                area_m2 = None
+        values["total_area_m2"] = round(area_m2, 3) if area_m2 is not None else None
+        if area_m2 is not None:
+            total_area_m2 += area_m2
+    return round(total_area_m2, 3)
 
 
 def main() -> int:
@@ -606,13 +715,14 @@ def main() -> int:
     )
     bounds = find_match_bounds(gabor_mask, gabor_response, args.min_bound_area)
     annotated_rgb = draw_bounds(target_rgb, bounds)
-    labeled_bounds, unique_elements = analyze_labeled_inner_bounds(
+    labeled_bounds, all_labeled_bounds, unique_elements = analyze_labeled_inner_bounds(
         target_rgb,
         bounds,
         args.ocr_language,
         args.min_cell_width,
         args.min_cell_height,
     )
+    total_area_m2 = add_area_totals(unique_elements)
     elements_annotated_rgb = draw_labeled_inner_bounds(target_rgb, labeled_bounds)
 
     hatch_definition_path = Path(args.hatch_definition_output)
@@ -638,6 +748,8 @@ def main() -> int:
     elements_result = {
         "target": str(target_path),
         "unique_elements": unique_elements,
+        "total_area_m2": total_area_m2,
+        "all_labeled_inner_bounds": all_labeled_bounds,
         "matching_inner_bounds": labeled_bounds,
     }
     elements_output_path = Path(args.elements_output)
@@ -664,7 +776,12 @@ def main() -> int:
     print(f"Bounds found: {len(bounds)}")
     print(f"Labeled inner bounds found: {len(labeled_bounds)}")
     for element, dimensions in unique_elements.items():
-        print(f"  {element}: {', '.join(dimensions)}")
+        horizontal = ", ".join(dimensions["horizontal_dimensions"]) or "?"
+        vertical = ", ".join(dimensions["vertical_dimensions"]) or "?"
+        area = dimensions.get("total_area_m2")
+        area_text = f"{area:.3f} m^2" if isinstance(area, (int, float)) else "?"
+        print(f"  {element}: count={dimensions['count']}, size={horizontal} x {vertical}, area={area_text}")
+    print(f"Total area: {total_area_m2:.3f} m^2")
     print(f"Wrote: {output_path}")
     print(f"Wrote hatch definition: {hatch_definition_path}")
     print(f"Wrote bounds: {bounds_output_path}")
