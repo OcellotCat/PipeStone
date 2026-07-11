@@ -6,6 +6,10 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 
 import cv2
@@ -328,6 +332,194 @@ def draw_bounds(image_rgb: np.ndarray, bounds: list[dict[str, object]]) -> np.nd
     return annotated
 
 
+def _cluster_projection_peaks(projection: np.ndarray, threshold: float) -> list[int]:
+    indices = np.flatnonzero(projection >= threshold)
+    if indices.size == 0:
+        return []
+    groups = np.split(indices, np.flatnonzero(np.diff(indices) > 1) + 1)
+    return [int(group[np.argmax(projection[group])]) for group in groups if group.size]
+
+
+def find_inner_grid_bounds(
+    image_rgb: np.ndarray,
+    outer_bound: dict[str, object],
+    min_cell_width: int,
+    min_cell_height: int,
+) -> list[dict[str, int]]:
+    """Find panel-like rectangles drawn with the coloured hatch/grid pen."""
+    x0, y0 = int(outer_bound["x"]), int(outer_bound["y"])
+    width, height = int(outer_bound["width"]), int(outer_bound["height"])
+    crop = image_rgb[y0 : y0 + height, x0 : x0 + width]
+    hsv = cv2.cvtColor(crop, cv2.COLOR_RGB2HSV)
+
+    # Construction drawings normally use a moderately saturated coloured pen
+    # for panel borders.  It cleanly separates the grid from black dimensions.
+    # Warm construction/hatch pen. Red revision clouds and blue adjacent
+    # materials are deliberately excluded because they often cross a bound.
+    saturated = (
+        (hsv[:, :, 0] >= 3)
+        & (hsv[:, :, 0] <= 40)
+        & (hsv[:, :, 1] >= 35)
+        & (hsv[:, :, 2] <= 245)
+    ).astype(np.uint8) * 255
+    vertical = cv2.morphologyEx(
+        saturated,
+        cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(9, height // 5))),
+    )
+    horizontal = cv2.morphologyEx(
+        saturated,
+        cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (max(9, width // 12), 1)),
+    )
+    xs = _cluster_projection_peaks(np.count_nonzero(vertical, axis=0), height * 0.15)
+    ys = _cluster_projection_peaks(np.count_nonzero(horizontal, axis=1), width * 0.15)
+
+    def merge_close(values: list[int], distance: int) -> list[int]:
+        merged: list[int] = []
+        for value in sorted(values):
+            if not merged or value - merged[-1] > distance:
+                merged.append(value)
+            else:
+                merged[-1] = (merged[-1] + value) // 2
+        return merged
+
+    # The external contour may obscure the coloured line, so the outer edges
+    # are always valid grid candidates too.
+    xs = merge_close([0, *xs, width - 1], max(3, min_cell_width // 8))
+    ys = merge_close([0, *ys, height - 1], max(3, min_cell_height // 8))
+    cells: list[dict[str, int]] = []
+    for top, bottom in zip(ys, ys[1:]):
+        for left, right in zip(xs, xs[1:]):
+            cell_width, cell_height = right - left, bottom - top
+            if cell_width < min_cell_width or cell_height < min_cell_height:
+                continue
+            cells.append(
+                {
+                    "x": x0 + left,
+                    "y": y0 + top,
+                    "x1": x0 + right,
+                    "y1": y0 + bottom,
+                    "width": cell_width,
+                    "height": cell_height,
+                }
+            )
+    return cells
+
+
+def _tesseract_text(image: np.ndarray, language: str, psm: int, whitelist: str = "") -> str:
+    if shutil.which("tesseract") is None:
+        return ""
+    with tempfile.NamedTemporaryFile(suffix=".png") as temporary:
+        cv2.imwrite(temporary.name, image)
+        command = ["tesseract", temporary.name, "stdout", "-l", language, "--psm", str(psm)]
+        if whitelist:
+            command.extend(["-c", f"tessedit_char_whitelist={whitelist}"])
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+    return " ".join(result.stdout.split())
+
+
+def _prepare_ocr_crop(crop_rgb: np.ndarray, threshold: int, scale: int = 4) -> np.ndarray:
+    gray = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2GRAY)
+    binary = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)[1]
+    return cv2.resize(binary, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+
+
+def recognize_element_name(cell_rgb: np.ndarray, language: str) -> str:
+    height, width = cell_rgb.shape[:2]
+    # Names sit in the upper-left part of a panel; excluding the rest greatly
+    # reduces interference from diagonal hatch strokes.
+    crop = cell_rgb[max(2, height // 30) : max(3, min(height - 2, height * 45 // 100)), 3 : max(4, width * 60 // 100)]
+    candidates: list[str] = []
+    for threshold in (120, 160):
+        text = _tesseract_text(_prepare_ocr_crop(crop, threshold, 5), language, 7)
+        text = re.sub(r"[^0-9A-Za-zА-Яа-яЁё.\-]+", "", text)
+        if re.search(r"[A-Za-zА-Яа-яЁё]", text) and re.search(r"\d", text):
+            candidates.append(text)
+    raw = max(candidates, key=len, default="")
+    if not raw:
+        return ""
+    match = re.match(r"(.+?)-?(\d[\d.]*)", raw)
+    if not match:
+        return raw
+    prefix, number = match.groups()
+    prefix = prefix.replace("K", "К").replace("k", "К")
+    if prefix in {"Кp", "Кр", "КP"}:
+        prefix = "Кр"
+    elif prefix.startswith(("Кст", "Ксп", "Кem", "Кем", "Ксm")):
+        prefix = "Ксп"
+    digits = re.sub(r"\D", "", number)
+    if len(digits) == 3:
+        number = f"{digits[0]}.{digits[1:]}"
+    else:
+        number = number.strip(".")
+    return f"{prefix}-{number}"
+
+
+def recognize_vertical_dimension(cell_rgb: np.ndarray) -> str:
+    height, width = cell_rgb.shape[:2]
+    strip_width = max(24, min(40, width // 8))
+    candidates: list[str] = []
+    # Vertical size callouts are normally near the middle of a panel.  The
+    # slightly off-centre samples accommodate the dimension line beside text.
+    centers = (width * 42 // 100, width * 44 // 100, width * 46 // 100)
+    left_edges = sorted({max(0, min(width - strip_width, center - strip_width // 2)) for center in centers})
+    for left in left_edges:
+        strip = cell_rgb[3 : height - 3, left : left + strip_width]
+        rotated = cv2.rotate(strip, cv2.ROTATE_90_CLOCKWISE)
+        for threshold in (110, 120, 130):
+            text = _tesseract_text(
+                _prepare_ocr_crop(rotated, threshold, 5),
+                "eng",
+                7,
+                whitelist="0123456789.,",
+            )
+            normalized = text.replace(",", ".").strip(".")
+            if re.fullmatch(r"\d{2,5}(?:\.\d+)?", normalized):
+                candidates.append(normalized)
+    if not candidates:
+        return ""
+    # Repeated recognition across overlapping strips/thresholds is a useful
+    # confidence signal; prefer frequency, then a plausible longer number.
+    return max(set(candidates), key=lambda value: (candidates.count(value), len(value), value))
+
+
+def analyze_labeled_inner_bounds(
+    image_rgb: np.ndarray,
+    outer_bounds: list[dict[str, object]],
+    ocr_language: str,
+    min_cell_width: int,
+    min_cell_height: int,
+) -> tuple[list[dict[str, object]], dict[str, list[str]]]:
+    matches: list[dict[str, object]] = []
+    unique_elements: dict[str, set[str]] = {}
+    for outer_index, outer_bound in enumerate(outer_bounds, start=1):
+        cells = find_inner_grid_bounds(image_rgb, outer_bound, min_cell_width, min_cell_height)
+        for cell in cells:
+            crop = image_rgb[cell["y"] : cell["y1"], cell["x"] : cell["x1"]]
+            element = recognize_element_name(crop, ocr_language)
+            dimension = recognize_vertical_dimension(crop)
+            if not element or not dimension:
+                continue
+            match: dict[str, object] = dict(cell)
+            match.update({"outer_bound": outer_index, "element": element, "vertical_dimension": dimension})
+            matches.append(match)
+            unique_elements.setdefault(element, set()).add(dimension)
+    return matches, {name: sorted(values) for name, values in sorted(unique_elements.items())}
+
+
+def draw_labeled_inner_bounds(image_rgb: np.ndarray, matches: list[dict[str, object]]) -> np.ndarray:
+    annotated = image_rgb.copy()
+    for index, match in enumerate(matches, start=1):
+        x, y, x1, y1 = (int(match[key]) for key in ("x", "y", "x1", "y1"))
+        cv2.rectangle(annotated, (x, y), (x1, y1), (220, 0, 220), 3)
+        # OpenCV's built-in font is ASCII-only; full Cyrillic names remain in
+        # the JSON while the image uses a stable index and dimension.
+        label = f'{index}. {match["vertical_dimension"]}'
+        cv2.putText(annotated, label, (x + 5, max(22, y - 7)), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (220, 0, 220), 2, cv2.LINE_AA)
+    return annotated
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Color-mask an image using the non-white colors from a hatch sample.")
     parser.add_argument("--sample", default="hatch.png", help="Reference hatch image to learn colors from.")
@@ -337,6 +529,16 @@ def main() -> int:
     parser.add_argument("--hatch-definition-output", default="hatch_definition.json", help="Hatch definition JSON output path.")
     parser.add_argument("--bounds-output", default="test_tiled_hatch_bounds.json", help="Matched area bounds JSON output path.")
     parser.add_argument("--bounds-image-output", default="test_tiled_hatch_bounds.png", help="Annotated bounds image output path.")
+    parser.add_argument(
+        "--elements-output",
+        default="test_tiled_elements.json",
+        help="JSON with inner bounds that contain an element name and a vertical dimension.",
+    )
+    parser.add_argument(
+        "--elements-image-output",
+        default="test_tiled_elements.png",
+        help="Image highlighting inner bounds that contain a name and vertical dimension.",
+    )
     parser.add_argument("--gabor-response-output", default="", help="Optional grayscale Gabor response output path.")
     parser.add_argument("--gabor-mask-output", default="", help="Optional grayscale Gabor match mask output path.")
     parser.add_argument("--threshold", type=float, default=18.0, help="LAB color distance threshold for matches.")
@@ -344,6 +546,9 @@ def main() -> int:
     parser.add_argument("--gabor-close-size", type=int, default=31, help="Morphological close size for grouping Gabor matches.")
     parser.add_argument("--gabor-dilate-size", type=int, default=11, help="Morphological dilation size for grouping Gabor matches.")
     parser.add_argument("--min-bound-area", type=int, default=1200, help="Minimum contour area for reported hatch bounds.")
+    parser.add_argument("--min-cell-width", type=int, default=80, help="Minimum width of an inner panel bound.")
+    parser.add_argument("--min-cell-height", type=int, default=55, help="Minimum height of an inner panel bound.")
+    parser.add_argument("--ocr-language", default="rus+eng", help="Tesseract languages used for element names.")
     parser.add_argument("--max-colors", type=int, default=48, help="Maximum number of learned palette colors.")
     parser.add_argument("--min-saturation", type=int, default=25, help="Minimum sample saturation treated as hatch color.")
     parser.add_argument("--max-value", type=int, default=250, help="Maximum sample value treated as hatch color.")
@@ -401,6 +606,14 @@ def main() -> int:
     )
     bounds = find_match_bounds(gabor_mask, gabor_response, args.min_bound_area)
     annotated_rgb = draw_bounds(target_rgb, bounds)
+    labeled_bounds, unique_elements = analyze_labeled_inner_bounds(
+        target_rgb,
+        bounds,
+        args.ocr_language,
+        args.min_cell_width,
+        args.min_cell_height,
+    )
+    elements_annotated_rgb = draw_labeled_inner_bounds(target_rgb, labeled_bounds)
 
     hatch_definition_path = Path(args.hatch_definition_output)
     hatch_definition_path.parent.mkdir(parents=True, exist_ok=True)
@@ -422,7 +635,17 @@ def main() -> int:
     bounds_output_path.parent.mkdir(parents=True, exist_ok=True)
     bounds_output_path.write_text(json.dumps(bounds_result, indent=2), encoding="utf-8")
 
+    elements_result = {
+        "target": str(target_path),
+        "unique_elements": unique_elements,
+        "matching_inner_bounds": labeled_bounds,
+    }
+    elements_output_path = Path(args.elements_output)
+    elements_output_path.parent.mkdir(parents=True, exist_ok=True)
+    elements_output_path.write_text(json.dumps(elements_result, ensure_ascii=False, indent=2), encoding="utf-8")
+
     write_rgb(Path(args.bounds_image_output), annotated_rgb)
+    write_rgb(Path(args.elements_image_output), elements_annotated_rgb)
     if args.gabor_response_output:
         response_path = Path(args.gabor_response_output)
         response_path.parent.mkdir(parents=True, exist_ok=True)
@@ -439,10 +662,15 @@ def main() -> int:
     print(f"Hatch spacing: {hatch_definition['spacing_px']} px")
     print(f"Matched pixels: {matched_pixels} / {total_pixels} ({matched_pixels / total_pixels:.2%})")
     print(f"Bounds found: {len(bounds)}")
+    print(f"Labeled inner bounds found: {len(labeled_bounds)}")
+    for element, dimensions in unique_elements.items():
+        print(f"  {element}: {', '.join(dimensions)}")
     print(f"Wrote: {output_path}")
     print(f"Wrote hatch definition: {hatch_definition_path}")
     print(f"Wrote bounds: {bounds_output_path}")
     print(f"Wrote bounds image: {args.bounds_image_output}")
+    print(f"Wrote elements: {elements_output_path}")
+    print(f"Wrote elements image: {args.elements_image_output}")
     if args.mask_output:
         print(f"Wrote mask: {args.mask_output}")
     if args.gabor_response_output:

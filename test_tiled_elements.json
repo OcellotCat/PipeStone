@@ -1,0 +1,49 @@
+{
+  "target": "test_tiled.jpg",
+  "unique_elements": {
+    "Кр-1.01": [
+      "800"
+    ],
+    "Кр-1.04": [
+      "465"
+    ],
+    "Ксп-1.01": [
+      "610"
+    ]
+  },
+  "matching_inner_bounds": [
+    {
+      "x": 376,
+      "y": 82,
+      "x1": 704,
+      "y1": 195,
+      "width": 328,
+      "height": 113,
+      "outer_bound": 1,
+      "element": "Кр-1.04",
+      "vertical_dimension": "465"
+    },
+    {
+      "x": 376,
+      "y": 195,
+      "x1": 704,
+      "y1": 385,
+      "width": 328,
+      "height": 190,
+      "outer_bound": 1,
+      "element": "Кр-1.01",
+      "vertical_dimension": "800"
+    },
+    {
+      "x": 376,
+      "y": 385,
+      "x1": 704,
+      "y1": 531,
+      "width": 328,
+      "height": 146,
+      "outer_bound": 1,
+      "element": "Ксп-1.01",
+      "vertical_dimension": "610"
+    }
+  ]
+}
