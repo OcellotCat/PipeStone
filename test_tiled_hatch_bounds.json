@@ -1,6 +1,6 @@
 {
   "sample": "hatch.png",
-  "target": "test_tiled.jpg",
+  "target": "test.jpg",
   "hatch_definition": {
     "line_type": "parallel_diagonal",
     "line_types": [
@@ -90,14 +90,94 @@
   },
   "bounds": [
     {
-      "x": 52,
-      "y": 291,
-      "x1": 1379,
-      "y1": 751,
+      "x": 5896,
+      "y": 2942,
+      "x1": 7233,
+      "y1": 4052,
+      "width": 1337,
+      "height": 1110,
+      "area_px": 1461979.0,
+      "mean_gabor_response": 22.41
+    },
+    {
+      "x": 1119,
+      "y": 541,
+      "x1": 2447,
+      "y1": 1650,
+      "width": 1328,
+      "height": 1109,
+      "area_px": 1460839.5,
+      "mean_gabor_response": 21.99
+    },
+    {
+      "x": 2489,
+      "y": 731,
+      "x1": 3823,
+      "y1": 1663,
+      "width": 1334,
+      "height": 932,
+      "area_px": 1173544.0,
+      "mean_gabor_response": 22.17
+    },
+    {
+      "x": 4526,
+      "y": 3160,
+      "x1": 5853,
+      "y1": 4052,
+      "width": 1327,
+      "height": 892,
+      "area_px": 1171192.0,
+      "mean_gabor_response": 22.21
+    },
+    {
+      "x": 3155,
+      "y": 3378,
+      "x1": 4483,
+      "y1": 4052,
+      "width": 1328,
+      "height": 674,
+      "area_px": 883781.5,
+      "mean_gabor_response": 21.96
+    },
+    {
+      "x": 3860,
+      "y": 976,
+      "x1": 5187,
+      "y1": 1650,
+      "width": 1327,
+      "height": 674,
+      "area_px": 883098.5,
+      "mean_gabor_response": 21.77
+    },
+    {
+      "x": 5230,
+      "y": 1191,
+      "x1": 6557,
+      "y1": 1651,
       "width": 1327,
       "height": 460,
-      "area_px": 600401.0,
-      "mean_gabor_response": 22.51
+      "area_px": 600609.5,
+      "mean_gabor_response": 21.69
+    },
+    {
+      "x": 1785,
+      "y": 3593,
+      "x1": 3113,
+      "y1": 4052,
+      "width": 1328,
+      "height": 459,
+      "area_px": 599387.0,
+      "mean_gabor_response": 21.82
+    },
+    {
+      "x": 9470,
+      "y": 611,
+      "x1": 9625,
+      "y1": 694,
+      "width": 155,
+      "height": 83,
+      "area_px": 12511.0,
+      "mean_gabor_response": 57.06
     }
   ]
 }
