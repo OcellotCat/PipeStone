@@ -1,6 +1,6 @@
 {
   "sample": "hatch.png",
-  "target": "test_tiled.jpg",
+  "target": "test.jpg",
   "hatch_definition": {
     "line_type": "parallel_diagonal",
     "line_types": [
@@ -84,51 +84,101 @@
   },
   "gabor": {
     "threshold": 42,
-    "tile_size": 1024,
+    "tile_size": 768,
     "close_size": 31,
     "dilate_size": 11,
     "min_bound_area": 1200
   },
   "bounds": [
     {
-      "x": 5484,
-      "y": 719,
-      "x1": 6821,
-      "y1": 1857,
+      "x": 5896,
+      "y": 2942,
+      "x1": 7233,
+      "y1": 4052,
       "width": 1337,
-      "height": 1138,
-      "area_px": 1460903.0,
-      "mean_gabor_response": 22.58
+      "height": 1110,
+      "area_px": 1461979.0,
+      "mean_gabor_response": 22.41
     },
     {
-      "x": 4114,
-      "y": 936,
-      "x1": 5441,
-      "y1": 1828,
+      "x": 1119,
+      "y": 541,
+      "x1": 2447,
+      "y1": 1650,
+      "width": 1328,
+      "height": 1109,
+      "area_px": 1460839.5,
+      "mean_gabor_response": 21.99
+    },
+    {
+      "x": 2489,
+      "y": 731,
+      "x1": 3823,
+      "y1": 1663,
+      "width": 1334,
+      "height": 932,
+      "area_px": 1173544.0,
+      "mean_gabor_response": 22.17
+    },
+    {
+      "x": 4526,
+      "y": 3160,
+      "x1": 5853,
+      "y1": 4052,
       "width": 1327,
       "height": 892,
-      "area_px": 1171004.0,
-      "mean_gabor_response": 22.29
+      "area_px": 1171192.0,
+      "mean_gabor_response": 22.21
     },
     {
-      "x": 2743,
-      "y": 1154,
-      "x1": 4071,
-      "y1": 1850,
+      "x": 3155,
+      "y": 3378,
+      "x1": 4483,
+      "y1": 4052,
       "width": 1328,
-      "height": 696,
-      "area_px": 882949.5,
-      "mean_gabor_response": 22.01
+      "height": 674,
+      "area_px": 883781.5,
+      "mean_gabor_response": 21.96
     },
     {
-      "x": 1373,
-      "y": 1356,
-      "x1": 2701,
-      "y1": 1828,
+      "x": 3860,
+      "y": 976,
+      "x1": 5187,
+      "y1": 1650,
+      "width": 1327,
+      "height": 674,
+      "area_px": 883098.5,
+      "mean_gabor_response": 21.77
+    },
+    {
+      "x": 5230,
+      "y": 1191,
+      "x1": 6557,
+      "y1": 1651,
+      "width": 1327,
+      "height": 460,
+      "area_px": 600609.5,
+      "mean_gabor_response": 21.69
+    },
+    {
+      "x": 1785,
+      "y": 3593,
+      "x1": 3113,
+      "y1": 4052,
       "width": 1328,
-      "height": 472,
-      "area_px": 600357.5,
-      "mean_gabor_response": 21.97
+      "height": 459,
+      "area_px": 599387.0,
+      "mean_gabor_response": 21.82
+    },
+    {
+      "x": 9470,
+      "y": 611,
+      "x1": 9625,
+      "y1": 694,
+      "width": 155,
+      "height": 83,
+      "area_px": 12511.0,
+      "mean_gabor_response": 57.06
     }
   ]
 }

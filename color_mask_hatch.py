@@ -449,20 +449,25 @@ def find_inner_grid_bounds(
     xs = merge_close([0, *xs, width - 1], max(3, min_cell_width // 8))
     ys = merge_close([0, *ys, height - 1], max(3, min_cell_height // 8))
 
-    # Recover a missing/interrupted vertical separator when the surrounding
-    # panel pitch is regular. This is deliberately limited to X: façade row
-    # heights commonly differ and must not be regularized.
-    if len(xs) >= 4:
-        gaps = np.diff(xs).astype(np.float64)
-        eligible_gaps = gaps[gaps >= min_cell_width]
+    def restore_missing_lines(values: list[int], minimum_gap: int) -> list[int]:
+        if len(values) < 4:
+            return values
+        gaps = np.diff(values).astype(np.float64)
+        eligible_gaps = gaps[gaps >= minimum_gap]
         typical_gap = float(np.median(eligible_gaps)) if eligible_gaps.size else 0.0
-        recovered_xs = list(xs)
-        for left, right in zip(xs, xs[1:]):
+        recovered = list(values)
+        for left, right in zip(values, values[1:]):
             gap = right - left
-            if typical_gap > 0 and gap >= typical_gap * 1.65:
+            # A conservative factor avoids splitting intentionally taller rows.
+            if typical_gap > 0 and gap >= typical_gap * 1.75:
                 parts = max(2, int(round(gap / typical_gap)))
-                recovered_xs.extend(int(round(left + gap * part / parts)) for part in range(1, parts))
-        xs = merge_close(recovered_xs, max(3, min_cell_width // 8))
+                recovered.extend(int(round(left + gap * part / parts)) for part in range(1, parts))
+        return merge_close(recovered, max(3, minimum_gap // 8))
+
+    # Recover interrupted separators from the dominant pitch. Both directions
+    # are supported, but the conservative gap factor preserves unequal rows.
+    xs = restore_missing_lines(xs, min_cell_width)
+    ys = restore_missing_lines(ys, min_cell_height)
     cells: list[dict[str, int]] = []
     for top, bottom in zip(ys, ys[1:]):
         for left, right in zip(xs, xs[1:]):
@@ -536,6 +541,19 @@ def recognize_element_name(cell_rgb: np.ndarray, language: str) -> str:
         text = re.sub(r"[^0-9A-Za-zА-Яа-яЁё.\-]+", "", text)
         if re.search(r"[A-Za-zА-Яа-яЁё]", text) and re.search(r"\d", text):
             candidates.append(text)
+    if not candidates:
+        # Interrupted borders, a nearby dimension line, or text shifted away
+        # from the corner can make the narrow PSM-7 pass fail. Retry only failed
+        # cells with a wider crop and sparse-text segmentation.
+        fallback_crop = cell_rgb[
+            2 : max(3, min(height - 2, height * 65 // 100)),
+            2 : max(4, width * 85 // 100),
+        ]
+        for threshold in (110, 145):
+            text = _tesseract_text(_prepare_ocr_crop(fallback_crop, threshold, 4), language, 11)
+            for token in re.findall(r"[0-9A-Za-zА-Яа-яЁё.\-]+", text):
+                if re.search(r"[A-Za-zА-Яа-яЁё]", token) and re.search(r"\d", token):
+                    candidates.append(token)
     raw = max(candidates, key=len, default="")
     if not raw:
         return ""
@@ -737,9 +755,15 @@ def analyze_labeled_inner_bounds(
     min_cell_height: int,
     min_cell_hatch_ratio: float,
     min_cell_hatch_pixels: int,
-) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, dict[str, object]]]:
+) -> tuple[
+    list[dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+    dict[str, dict[str, object]],
+]:
     size_source_bounds: list[dict[str, object]] = []
     all_labeled_bounds: list[dict[str, object]] = []
+    validated_inner_bounds: list[dict[str, object]] = []
     element_counts: Counter[str] = Counter()
     unique_elements: dict[str, dict[str, set[str]]] = {}
     element_cells: dict[str, list[tuple[np.ndarray, dict[str, int], dict[str, object]]]] = {}
@@ -761,6 +785,7 @@ def analyze_labeled_inner_bounds(
                 continue
             cell["hatch_match_pixels"] = hatch_pixels
             cell["hatch_match_ratio"] = round(hatch_ratio, 5)
+            cell["outer_bound"] = outer_index
             cells.append(cell)
         recognized_names: list[str] = []
         for cell in cells:
@@ -782,6 +807,9 @@ def analyze_labeled_inner_bounds(
                         recognized_names[index] = dominant
 
         for cell, element in zip(cells, recognized_names):
+            validated: dict[str, object] = dict(cell)
+            validated["element"] = element or None
+            validated_inner_bounds.append(validated)
             if not element:
                 continue
 
@@ -854,7 +882,7 @@ def analyze_labeled_inner_bounds(
             name,
             {"count": int(count), "vertical_dimensions": [], "horizontal_dimensions": []},
         )
-    return size_source_bounds, all_labeled_bounds, serialized
+    return size_source_bounds, all_labeled_bounds, validated_inner_bounds, serialized
 
 
 def draw_labeled_inner_bounds(image_rgb: np.ndarray, labeled_bounds: list[dict[str, object]]) -> np.ndarray:
@@ -996,7 +1024,7 @@ def main() -> int:
     )
     bounds = find_match_bounds(gabor_mask, gabor_response, args.min_bound_area)
     annotated_rgb = draw_bounds(target_rgb, bounds)
-    size_source_bounds, all_labeled_bounds, unique_elements = analyze_labeled_inner_bounds(
+    size_source_bounds, all_labeled_bounds, validated_inner_bounds, unique_elements = analyze_labeled_inner_bounds(
         target_rgb,
         mask,
         bounds,
@@ -1007,7 +1035,7 @@ def main() -> int:
         args.min_cell_hatch_pixels,
     )
     total_area_m2 = add_area_totals(unique_elements)
-    elements_annotated_rgb = draw_labeled_inner_bounds(target_rgb, all_labeled_bounds)
+    elements_annotated_rgb = draw_labeled_inner_bounds(target_rgb, validated_inner_bounds)
 
     hatch_definition_path = Path(args.hatch_definition_output)
     hatch_definition_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1044,6 +1072,7 @@ def main() -> int:
         ),
         "unique_elements": unique_elements,
         "total_area_m2": total_area_m2,
+        "validated_inner_bounds": validated_inner_bounds,
         "all_labeled_inner_bounds": all_labeled_bounds,
         "size_source_bounds": size_source_bounds,
     }
@@ -1069,6 +1098,7 @@ def main() -> int:
     print(f"Hatch spacing: {hatch_definition['spacing_px']} px")
     print(f"Matched pixels: {matched_pixels} / {total_pixels} ({matched_pixels / total_pixels:.2%})")
     print(f"Bounds found: {len(bounds)}")
+    print(f"Hatch-validated inner bounds found: {len(validated_inner_bounds)}")
     print(f"Labeled inner bounds found: {len(all_labeled_bounds)}")
     for element, dimensions in unique_elements.items():
         horizontal = ", ".join(dimensions["horizontal_dimensions"]) or "?"
