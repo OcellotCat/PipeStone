@@ -229,7 +229,12 @@ def mask_by_palette(
     return output.reshape(height, width, 3), mask.reshape(height, width)
 
 
-def gabor_hatch_response(image_rgb: np.ndarray, color_mask: np.ndarray, hatch_definition: dict[str, object]) -> np.ndarray:
+def gabor_hatch_response(
+    image_rgb: np.ndarray,
+    color_mask: np.ndarray,
+    hatch_definition: dict[str, object],
+    tile_size: int = 1024,
+) -> np.ndarray:
     gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
     gray = cv2.GaussianBlur(gray, (3, 3), 0)
     inverted = 255 - gray
@@ -255,11 +260,63 @@ def gabor_hatch_response(image_rgb: np.ndarray, color_mask: np.ndarray, hatch_de
     if norm > 0.0:
         kernel /= norm
 
-    response = cv2.filter2D(inverted.astype(np.float32), cv2.CV_32F, kernel)
-    response = np.abs(response)
-    response *= color_mask.astype(np.float32)
-    response = cv2.GaussianBlur(response, (5, 5), 0)
-    return cv2.normalize(response, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    if tile_size <= 0 or (gray.shape[0] <= tile_size and gray.shape[1] <= tile_size):
+        response = cv2.filter2D(inverted, cv2.CV_32F, kernel)
+        np.abs(response, out=response)
+        np.multiply(response, color_mask, out=response)
+        cv2.GaussianBlur(response, (5, 5), 0, dst=response)
+        return cv2.normalize(response, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+
+    # Disk-backed float response keeps RAM nearly independent of drawing size.
+    # The extra two-pixel halo is required by the final 5x5 Gaussian blur.
+    image_height, image_width = gray.shape
+    halo = kernel_size // 2 + 2
+    with tempfile.NamedTemporaryFile(prefix="gabor_response_", suffix=".dat") as backing_file:
+        response_map = np.memmap(backing_file.name, dtype=np.float32, mode="w+", shape=(image_height, image_width))
+        response_min = math.inf
+        response_max = -math.inf
+        for top in range(0, image_height, tile_size):
+            bottom = min(image_height, top + tile_size)
+            source_top = max(0, top - halo)
+            source_bottom = min(image_height, bottom + halo)
+            for left in range(0, image_width, tile_size):
+                right = min(image_width, left + tile_size)
+                source_left = max(0, left - halo)
+                source_right = min(image_width, right + halo)
+                tile = inverted[source_top:source_bottom, source_left:source_right]
+                tile_response = cv2.filter2D(tile, cv2.CV_32F, kernel)
+                np.abs(tile_response, out=tile_response)
+                np.multiply(
+                    tile_response,
+                    color_mask[source_top:source_bottom, source_left:source_right],
+                    out=tile_response,
+                )
+                cv2.GaussianBlur(tile_response, (5, 5), 0, dst=tile_response)
+                crop_top = top - source_top
+                crop_left = left - source_left
+                core = tile_response[
+                    crop_top : crop_top + (bottom - top),
+                    crop_left : crop_left + (right - left),
+                ]
+                response_map[top:bottom, left:right] = core
+                response_min = min(response_min, float(np.min(core)))
+                response_max = max(response_max, float(np.max(core)))
+
+        normalized = np.zeros((image_height, image_width), dtype=np.uint8)
+        if response_max > response_min:
+            scale = 255.0 / (response_max - response_min)
+            for top in range(0, image_height, tile_size):
+                bottom = min(image_height, top + tile_size)
+                for left in range(0, image_width, tile_size):
+                    right = min(image_width, left + tile_size)
+                    values = response_map[top:bottom, left:right]
+                    normalized[top:bottom, left:right] = np.clip(
+                        (values - response_min) * scale,
+                        0,
+                        255,
+                    ).astype(np.uint8)
+        del response_map
+        return normalized
 
 
 def build_gabor_match_mask(
@@ -373,8 +430,10 @@ def find_inner_grid_bounds(
         cv2.MORPH_OPEN,
         cv2.getStructuringElement(cv2.MORPH_RECT, (max(9, width // 12), 1)),
     )
-    xs = _cluster_projection_peaks(np.count_nonzero(vertical, axis=0), height * 0.15)
-    ys = _cluster_projection_peaks(np.count_nonzero(horizontal, axis=1), width * 0.15)
+    # A lower threshold preserves interrupted panel borders. Long morphology
+    # kernels still suppress the diagonal hatch strokes themselves.
+    xs = _cluster_projection_peaks(np.count_nonzero(vertical, axis=0), height * 0.08)
+    ys = _cluster_projection_peaks(np.count_nonzero(horizontal, axis=1), width * 0.08)
 
     def merge_close(values: list[int], distance: int) -> list[int]:
         merged: list[int] = []
@@ -389,6 +448,21 @@ def find_inner_grid_bounds(
     # are always valid grid candidates too.
     xs = merge_close([0, *xs, width - 1], max(3, min_cell_width // 8))
     ys = merge_close([0, *ys, height - 1], max(3, min_cell_height // 8))
+
+    # Recover a missing/interrupted vertical separator when the surrounding
+    # panel pitch is regular. This is deliberately limited to X: façade row
+    # heights commonly differ and must not be regularized.
+    if len(xs) >= 4:
+        gaps = np.diff(xs).astype(np.float64)
+        eligible_gaps = gaps[gaps >= min_cell_width]
+        typical_gap = float(np.median(eligible_gaps)) if eligible_gaps.size else 0.0
+        recovered_xs = list(xs)
+        for left, right in zip(xs, xs[1:]):
+            gap = right - left
+            if typical_gap > 0 and gap >= typical_gap * 1.65:
+                parts = max(2, int(round(gap / typical_gap)))
+                recovered_xs.extend(int(round(left + gap * part / parts)) for part in range(1, parts))
+        xs = merge_close(recovered_xs, max(3, min_cell_width // 8))
     cells: list[dict[str, int]] = []
     for top, bottom in zip(ys, ys[1:]):
         for left, right in zip(xs, xs[1:]):
@@ -416,6 +490,21 @@ def bound_is_inside(inner: dict[str, object], outer: dict[str, object]) -> bool:
         and int(inner["x1"]) <= int(outer["x1"])
         and int(inner["y1"]) <= int(outer["y1"])
     )
+
+
+def validate_cell_hatch(
+    cell: dict[str, int],
+    hatch_mask: np.ndarray,
+    min_ratio: float,
+    min_pixels: int,
+) -> tuple[bool, int, float]:
+    """Confirm that a proposed inner cell actually contains learned hatch."""
+    crop = hatch_mask[cell["y"] : cell["y1"], cell["x"] : cell["x1"]]
+    if crop.size == 0:
+        return False, 0, 0.0
+    pixels = int(np.count_nonzero(crop))
+    ratio = pixels / float(crop.size)
+    return pixels >= min_pixels and ratio >= min_ratio, pixels, ratio
 
 
 def _tesseract_text(image: np.ndarray, language: str, psm: int, whitelist: str = "") -> str:
@@ -641,10 +730,13 @@ def dimensions_match_cell(horizontal: str, vertical: str, cell: dict[str, int], 
 
 def analyze_labeled_inner_bounds(
     image_rgb: np.ndarray,
+    hatch_mask: np.ndarray,
     outer_bounds: list[dict[str, object]],
     ocr_language: str,
     min_cell_width: int,
     min_cell_height: int,
+    min_cell_hatch_ratio: float,
+    min_cell_hatch_pixels: int,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, dict[str, object]]]:
     size_source_bounds: list[dict[str, object]] = []
     all_labeled_bounds: list[dict[str, object]] = []
@@ -655,7 +747,21 @@ def analyze_labeled_inner_bounds(
         detected_cells = find_inner_grid_bounds(image_rgb, outer_bound, min_cell_width, min_cell_height)
         # This is a hard OCR boundary: names from a cell extending even one
         # pixel outside its hatch-bound must never enter the element registry.
-        cells = [cell for cell in detected_cells if bound_is_inside(cell, outer_bound)]
+        cells: list[dict[str, int]] = []
+        for cell in detected_cells:
+            if not bound_is_inside(cell, outer_bound):
+                continue
+            hatch_ok, hatch_pixels, hatch_ratio = validate_cell_hatch(
+                cell,
+                hatch_mask,
+                min_cell_hatch_ratio,
+                min_cell_hatch_pixels,
+            )
+            if not hatch_ok:
+                continue
+            cell["hatch_match_pixels"] = hatch_pixels
+            cell["hatch_match_ratio"] = round(hatch_ratio, 5)
+            cells.append(cell)
         recognized_names: list[str] = []
         for cell in cells:
             crop = image_rgb[cell["y"] : cell["y1"], cell["x"] : cell["x1"]]
@@ -809,11 +915,29 @@ def main() -> int:
     parser.add_argument("--gabor-mask-output", default="", help="Optional grayscale Gabor match mask output path.")
     parser.add_argument("--threshold", type=float, default=18.0, help="LAB color distance threshold for matches.")
     parser.add_argument("--gabor-threshold", type=int, default=42, help="Gabor response threshold for hatch matches.")
+    parser.add_argument(
+        "--gabor-tile-size",
+        type=int,
+        default=1024,
+        help="Gabor tile side in pixels; use 0 for legacy full-image filtering.",
+    )
     parser.add_argument("--gabor-close-size", type=int, default=31, help="Morphological close size for grouping Gabor matches.")
     parser.add_argument("--gabor-dilate-size", type=int, default=11, help="Morphological dilation size for grouping Gabor matches.")
     parser.add_argument("--min-bound-area", type=int, default=1200, help="Minimum contour area for reported hatch bounds.")
     parser.add_argument("--min-cell-width", type=int, default=80, help="Minimum width of an inner panel bound.")
     parser.add_argument("--min-cell-height", type=int, default=55, help="Minimum height of an inner panel bound.")
+    parser.add_argument(
+        "--min-cell-hatch-ratio",
+        type=float,
+        default=0.005,
+        help="Minimum fraction of learned hatch pixels required inside an inner bound.",
+    )
+    parser.add_argument(
+        "--min-cell-hatch-pixels",
+        type=int,
+        default=25,
+        help="Minimum absolute number of learned hatch pixels required inside an inner bound.",
+    )
     parser.add_argument("--ocr-language", default="rus+eng", help="Tesseract languages used for element names.")
     parser.add_argument("--max-colors", type=int, default=48, help="Maximum number of learned palette colors.")
     parser.add_argument("--min-saturation", type=int, default=25, help="Minimum sample saturation treated as hatch color.")
@@ -862,7 +986,7 @@ def main() -> int:
         mask_path.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(mask_path), (mask.astype(np.uint8) * 255))
 
-    gabor_response = gabor_hatch_response(target_rgb, mask, hatch_definition)
+    gabor_response = gabor_hatch_response(target_rgb, mask, hatch_definition, tile_size=args.gabor_tile_size)
     gabor_mask = build_gabor_match_mask(
         gabor_response,
         mask,
@@ -874,10 +998,13 @@ def main() -> int:
     annotated_rgb = draw_bounds(target_rgb, bounds)
     size_source_bounds, all_labeled_bounds, unique_elements = analyze_labeled_inner_bounds(
         target_rgb,
+        mask,
         bounds,
         args.ocr_language,
         args.min_cell_width,
         args.min_cell_height,
+        args.min_cell_hatch_ratio,
+        args.min_cell_hatch_pixels,
     )
     total_area_m2 = add_area_totals(unique_elements)
     elements_annotated_rgb = draw_labeled_inner_bounds(target_rgb, all_labeled_bounds)
@@ -892,6 +1019,7 @@ def main() -> int:
         "hatch_definition": hatch_definition,
         "gabor": {
             "threshold": int(args.gabor_threshold),
+            "tile_size": int(args.gabor_tile_size),
             "close_size": int(args.gabor_close_size),
             "dilate_size": int(args.gabor_dilate_size),
             "min_bound_area": int(args.min_bound_area),
@@ -905,6 +1033,11 @@ def main() -> int:
     elements_result = {
         "target": str(target_path),
         "labels_restricted_to_hatch_bounds": True,
+        "inner_bounds_require_hatch_match": True,
+        "cell_hatch_validation": {
+            "min_ratio": args.min_cell_hatch_ratio,
+            "min_pixels": args.min_cell_hatch_pixels,
+        },
         "containment_verified": all(
             bound_is_inside(bound, bounds[int(bound["outer_bound"]) - 1])
             for bound in all_labeled_bounds

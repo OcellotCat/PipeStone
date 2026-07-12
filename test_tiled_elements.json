@@ -1,59 +1,84 @@
 {
-  "target": "test.jpg",
+  "target": "test_tiled.jpg",
   "labels_restricted_to_hatch_bounds": true,
+  "inner_bounds_require_hatch_match": true,
+  "cell_hatch_validation": {
+    "min_ratio": 0.005,
+    "min_pixels": 25
+  },
   "containment_verified": true,
   "unique_elements": {
-    "Spy-02": {
-      "count": 1,
-      "vertical_dimensions": [],
-      "horizontal_dimensions": [],
-      "total_area_m2": null
-    },
-    "Жр-1.04": {
-      "count": 1,
-      "vertical_dimensions": [
-        "465"
-      ],
-      "horizontal_dimensions": [
-        "1390"
-      ],
-      "total_area_m2": 0.646
-    },
-    "Кam-1.01": {
-      "count": 1,
-      "vertical_dimensions": [],
-      "horizontal_dimensions": [],
-      "total_area_m2": null
-    },
-    "Кcm-1.01": {
-      "count": 1,
-      "vertical_dimensions": [],
-      "horizontal_dimensions": [],
-      "total_area_m2": null
-    },
-    "Кcm-1.04": {
+    "ecm-1.01": {
       "count": 1,
       "vertical_dimensions": [],
       "horizontal_dimensions": [],
       "total_area_m2": null
     },
     "Кcom-1.01": {
-      "count": 8,
+      "count": 10,
       "vertical_dimensions": [
         "610"
       ],
       "horizontal_dimensions": [
         "1390"
       ],
-      "total_area_m2": 6.783
+      "total_area_m2": 8.479
     },
-    "Кcom-1.04": {
+    "Кgm-1.01": {
       "count": 1,
       "vertical_dimensions": [],
       "horizontal_dimensions": [],
       "total_area_m2": null
     },
-    "Кcom-1.07": {
+    "Кp-T-01": {
+      "count": 4,
+      "vertical_dimensions": [],
+      "horizontal_dimensions": [],
+      "total_area_m2": null
+    },
+    "Кp-T-02": {
+      "count": 4,
+      "vertical_dimensions": [],
+      "horizontal_dimensions": [],
+      "total_area_m2": null
+    },
+    "Кр-1.01": {
+      "count": 24,
+      "vertical_dimensions": [
+        "800"
+      ],
+      "horizontal_dimensions": [
+        "1390"
+      ],
+      "total_area_m2": 26.688
+    },
+    "Кр-1.03": {
+      "count": 4,
+      "vertical_dimensions": [
+        "570"
+      ],
+      "horizontal_dimensions": [
+        "1390"
+      ],
+      "total_area_m2": 3.169
+    },
+    "Кр-1.04": {
+      "count": 4,
+      "vertical_dimensions": [],
+      "horizontal_dimensions": [],
+      "total_area_m2": null
+    },
+    "Кр-1.07": {
+      "count": 8,
+      "vertical_dimensions": [
+        "800"
+      ],
+      "horizontal_dimensions": [
+        "1390"
+      ],
+      "total_area_m2": 8.896
+    },
+    "Ксп-1.01": {
       "count": 1,
       "vertical_dimensions": [
         "610"
@@ -63,7 +88,7 @@
       ],
       "total_area_m2": 0.848
     },
-    "Кom-1.01": {
+    "Ксп-1.07": {
       "count": 2,
       "vertical_dimensions": [
         "610"
@@ -73,1352 +98,838 @@
       ],
       "total_area_m2": 1.696
     },
-    "Кom-10": {
-      "count": 1,
-      "vertical_dimensions": [],
-      "horizontal_dimensions": [],
-      "total_area_m2": null
-    },
-    "Кs-7": {
-      "count": 1,
-      "vertical_dimensions": [],
-      "horizontal_dimensions": [],
-      "total_area_m2": null
-    },
-    "Кр-1.01": {
-      "count": 38,
-      "vertical_dimensions": [
-        "800"
-      ],
-      "horizontal_dimensions": [
-        "1390"
-      ],
-      "total_area_m2": 42.256
-    },
-    "Кр-1.03": {
-      "count": 8,
-      "vertical_dimensions": [
-        "510"
-      ],
-      "horizontal_dimensions": [
-        "1390"
-      ],
-      "total_area_m2": 5.671
-    },
-    "Кр-1.04": {
-      "count": 5,
-      "vertical_dimensions": [
-        "800"
-      ],
-      "horizontal_dimensions": [
-        "1390"
-      ],
-      "total_area_m2": 5.56
-    },
-    "Кр-1.07": {
-      "count": 27,
-      "vertical_dimensions": [
-        "800"
-      ],
-      "horizontal_dimensions": [
-        "1390"
-      ],
-      "total_area_m2": 30.024
-    },
-    "Кр-10": {
-      "count": 4,
-      "vertical_dimensions": [
-        "800"
-      ],
-      "horizontal_dimensions": [
-        "1390"
-      ],
-      "total_area_m2": 4.448
-    },
-    "Кр-1020": {
-      "count": 1,
-      "vertical_dimensions": [
-        "635"
-      ],
-      "horizontal_dimensions": [
-        "1390"
-      ],
-      "total_area_m2": 0.883
-    },
-    "Кр-1047": {
-      "count": 1,
-      "vertical_dimensions": [],
-      "horizontal_dimensions": [],
-      "total_area_m2": null
-    },
-    "Кр-1067": {
-      "count": 1,
-      "vertical_dimensions": [],
-      "horizontal_dimensions": [],
-      "total_area_m2": null
-    },
-    "Ксп-1.0": {
-      "count": 1,
-      "vertical_dimensions": [
-        "610"
-      ],
-      "horizontal_dimensions": [
-        "1390"
-      ],
-      "total_area_m2": 0.848
-    },
-    "Ксп-1.01": {
-      "count": 11,
-      "vertical_dimensions": [
-        "619"
-      ],
-      "horizontal_dimensions": [
-        "1390"
-      ],
-      "total_area_m2": 9.465
-    },
-    "Кут-1.01": {
-      "count": 1,
-      "vertical_dimensions": [],
-      "horizontal_dimensions": [],
-      "total_area_m2": null
-    },
-    "р-р-1": {
+    "Ксп-10": {
       "count": 1,
       "vertical_dimensions": [],
       "horizontal_dimensions": [],
       "total_area_m2": null
     }
   },
-  "total_area_m2": 109.128,
+  "total_area_m2": 49.776,
   "all_labeled_inner_bounds": [
     {
-      "x": 6560,
-      "y": 2950,
-      "x1": 6889,
-      "y1": 3139,
-      "width": 329,
-      "height": 189,
-      "outer_bound": 1,
-      "element": "Кр-10"
-    },
-    {
-      "x": 6229,
-      "y": 3139,
-      "x1": 6560,
-      "y1": 3331,
-      "width": 331,
-      "height": 192,
-      "outer_bound": 1,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 5896,
-      "y": 3331,
-      "x1": 6229,
-      "y1": 3521,
-      "width": 333,
-      "height": 190,
-      "outer_bound": 1,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 6229,
-      "y": 3331,
-      "x1": 6560,
-      "y1": 3521,
-      "width": 331,
-      "height": 190,
-      "outer_bound": 1,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 6560,
-      "y": 3331,
-      "x1": 6889,
-      "y1": 3521,
-      "width": 329,
-      "height": 190,
-      "outer_bound": 1,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 6889,
-      "y": 3331,
-      "x1": 7232,
-      "y1": 3521,
-      "width": 343,
-      "height": 190,
-      "outer_bound": 1,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 5896,
-      "y": 3521,
-      "x1": 6229,
-      "y1": 3711,
-      "width": 333,
-      "height": 190,
-      "outer_bound": 1,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 6229,
-      "y": 3521,
-      "x1": 6560,
-      "y1": 3711,
-      "width": 331,
-      "height": 190,
-      "outer_bound": 1,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 6560,
-      "y": 3521,
-      "x1": 6889,
-      "y1": 3711,
-      "width": 329,
-      "height": 190,
-      "outer_bound": 1,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 6889,
-      "y": 3521,
-      "x1": 7232,
-      "y1": 3711,
-      "width": 343,
-      "height": 190,
-      "outer_bound": 1,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 6229,
-      "y": 3711,
-      "x1": 6560,
-      "y1": 3901,
-      "width": 331,
-      "height": 190,
-      "outer_bound": 1,
-      "element": "Кр-1.04"
-    },
-    {
-      "x": 6560,
-      "y": 3711,
-      "x1": 6889,
-      "y1": 3901,
-      "width": 329,
-      "height": 190,
-      "outer_bound": 1,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 6889,
-      "y": 3711,
-      "x1": 7232,
-      "y1": 3901,
-      "width": 343,
-      "height": 190,
-      "outer_bound": 1,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 5896,
-      "y": 3901,
-      "x1": 6229,
-      "y1": 4048,
-      "width": 333,
-      "height": 147,
-      "outer_bound": 1,
-      "element": "Кcom-1.01"
-    },
-    {
-      "x": 6229,
-      "y": 3901,
-      "x1": 6560,
-      "y1": 4048,
-      "width": 331,
-      "height": 147,
-      "outer_bound": 1,
-      "element": "Кcom-1.01"
-    },
-    {
-      "x": 6560,
-      "y": 3901,
-      "x1": 6889,
-      "y1": 4048,
-      "width": 329,
-      "height": 147,
-      "outer_bound": 1,
-      "element": "Кcom-1.01"
-    },
-    {
-      "x": 6889,
-      "y": 3901,
-      "x1": 7232,
-      "y1": 4048,
-      "width": 343,
-      "height": 147,
-      "outer_bound": 1,
-      "element": "Кcom-1.01"
-    },
-    {
-      "x": 1119,
-      "y": 544,
-      "x1": 1452,
-      "y1": 737,
+      "x": 5484,
+      "y": 722,
+      "x1": 5817,
+      "y1": 915,
       "width": 333,
       "height": 193,
-      "outer_bound": 2,
-      "element": "Кs-7"
+      "hatch_match_pixels": 9148,
+      "hatch_match_ratio": 0.14234,
+      "outer_bound": 1,
+      "element": "Кp-T-01"
     },
     {
-      "x": 1782,
-      "y": 544,
-      "x1": 2113,
-      "y1": 737,
+      "x": 5817,
+      "y": 722,
+      "x1": 6146,
+      "y1": 915,
+      "width": 329,
+      "height": 193,
+      "hatch_match_pixels": 9772,
+      "hatch_match_ratio": 0.1539,
+      "outer_bound": 1,
+      "element": "Кp-T-01"
+    },
+    {
+      "x": 6146,
+      "y": 722,
+      "x1": 6477,
+      "y1": 915,
       "width": 331,
       "height": 193,
-      "outer_bound": 2,
-      "element": "Кр-10"
+      "hatch_match_pixels": 9550,
+      "hatch_match_ratio": 0.14949,
+      "outer_bound": 1,
+      "element": "Кp-T-01"
     },
     {
-      "x": 1119,
-      "y": 927,
-      "x1": 1452,
-      "y1": 1118,
+      "x": 6477,
+      "y": 722,
+      "x1": 6820,
+      "y1": 915,
+      "width": 343,
+      "height": 193,
+      "hatch_match_pixels": 9565,
+      "hatch_match_ratio": 0.14449,
+      "outer_bound": 1,
+      "element": "Кp-T-01"
+    },
+    {
+      "x": 5484,
+      "y": 1105,
+      "x1": 5817,
+      "y1": 1297,
       "width": 333,
-      "height": 191,
-      "outer_bound": 2,
+      "height": 192,
+      "hatch_match_pixels": 9917,
+      "hatch_match_ratio": 0.15511,
+      "outer_bound": 1,
       "element": "Кр-1.01"
     },
     {
-      "x": 1452,
-      "y": 927,
-      "x1": 1782,
-      "y1": 1118,
-      "width": 330,
-      "height": 191,
-      "outer_bound": 2,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 1782,
-      "y": 927,
-      "x1": 2113,
-      "y1": 1118,
-      "width": 331,
-      "height": 191,
-      "outer_bound": 2,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 2113,
-      "y": 927,
-      "x1": 2446,
-      "y1": 1118,
-      "width": 333,
-      "height": 191,
-      "outer_bound": 2,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 1119,
-      "y": 1118,
-      "x1": 1452,
-      "y1": 1308,
-      "width": 333,
-      "height": 190,
-      "outer_bound": 2,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 1452,
-      "y": 1118,
-      "x1": 1782,
-      "y1": 1308,
-      "width": 330,
-      "height": 190,
-      "outer_bound": 2,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 1782,
-      "y": 1118,
-      "x1": 2113,
-      "y1": 1308,
-      "width": 331,
-      "height": 190,
-      "outer_bound": 2,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 2113,
-      "y": 1118,
-      "x1": 2446,
-      "y1": 1308,
-      "width": 333,
-      "height": 190,
-      "outer_bound": 2,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 1119,
-      "y": 1308,
-      "x1": 1452,
-      "y1": 1499,
-      "width": 333,
-      "height": 191,
-      "outer_bound": 2,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 1452,
-      "y": 1308,
-      "x1": 1782,
-      "y1": 1499,
-      "width": 330,
-      "height": 191,
-      "outer_bound": 2,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 1782,
-      "y": 1308,
-      "x1": 2113,
-      "y1": 1499,
-      "width": 331,
-      "height": 191,
-      "outer_bound": 2,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 2113,
-      "y": 1308,
-      "x1": 2446,
-      "y1": 1499,
-      "width": 333,
-      "height": 191,
-      "outer_bound": 2,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 1119,
-      "y": 1499,
-      "x1": 1452,
-      "y1": 1646,
-      "width": 333,
-      "height": 147,
-      "outer_bound": 2,
-      "element": "Ксп-1.01"
-    },
-    {
-      "x": 1452,
-      "y": 1499,
-      "x1": 1782,
-      "y1": 1646,
-      "width": 330,
-      "height": 147,
-      "outer_bound": 2,
-      "element": "Ксп-1.01"
-    },
-    {
-      "x": 1782,
-      "y": 1499,
-      "x1": 2113,
-      "y1": 1646,
-      "width": 331,
-      "height": 147,
-      "outer_bound": 2,
-      "element": "Ксп-1.01"
-    },
-    {
-      "x": 2113,
-      "y": 1499,
-      "x1": 2446,
-      "y1": 1646,
-      "width": 333,
-      "height": 147,
-      "outer_bound": 2,
-      "element": "Ксп-1.01"
-    },
-    {
-      "x": 3152,
-      "y": 765,
-      "x1": 3481,
-      "y1": 928,
+      "x": 5817,
+      "y": 1105,
+      "x1": 6146,
+      "y1": 1297,
       "width": 329,
-      "height": 163,
-      "outer_bound": 3,
-      "element": "Кр-1020"
+      "height": 192,
+      "hatch_match_pixels": 10314,
+      "hatch_match_ratio": 0.16328,
+      "outer_bound": 1,
+      "element": "Кр-1.01"
     },
     {
-      "x": 3481,
-      "y": 765,
-      "x1": 3822,
-      "y1": 928,
-      "width": 341,
-      "height": 163,
-      "outer_bound": 3,
-      "element": "Кр-10"
+      "x": 6146,
+      "y": 1105,
+      "x1": 6477,
+      "y1": 1297,
+      "width": 331,
+      "height": 192,
+      "hatch_match_pixels": 10187,
+      "hatch_match_ratio": 0.16029,
+      "outer_bound": 1,
+      "element": "Кр-1.01"
     },
     {
-      "x": 2489,
-      "y": 1119,
-      "x1": 2822,
-      "y1": 1308,
+      "x": 6477,
+      "y": 1105,
+      "x1": 6820,
+      "y1": 1297,
+      "width": 343,
+      "height": 192,
+      "hatch_match_pixels": 9733,
+      "hatch_match_ratio": 0.14779,
+      "outer_bound": 1,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 5484,
+      "y": 1297,
+      "x1": 5817,
+      "y1": 1486,
       "width": 333,
       "height": 189,
-      "outer_bound": 3,
-      "element": "Кр-1.01"
+      "hatch_match_pixels": 8575,
+      "hatch_match_ratio": 0.13625,
+      "outer_bound": 1,
+      "element": "Кр-1.07"
     },
     {
-      "x": 2822,
-      "y": 1119,
-      "x1": 3152,
-      "y1": 1308,
-      "width": 330,
-      "height": 189,
-      "outer_bound": 3,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 3152,
-      "y": 1119,
-      "x1": 3481,
-      "y1": 1308,
+      "x": 5817,
+      "y": 1297,
+      "x1": 6146,
+      "y1": 1486,
       "width": 329,
       "height": 189,
-      "outer_bound": 3,
-      "element": "Кр-1.01"
+      "hatch_match_pixels": 9247,
+      "hatch_match_ratio": 0.14871,
+      "outer_bound": 1,
+      "element": "Кр-1.07"
     },
     {
-      "x": 3481,
-      "y": 1119,
-      "x1": 3822,
-      "y1": 1308,
-      "width": 341,
+      "x": 6146,
+      "y": 1297,
+      "x1": 6477,
+      "y1": 1486,
+      "width": 331,
       "height": 189,
-      "outer_bound": 3,
-      "element": "Кр-1.01"
+      "hatch_match_pixels": 9097,
+      "hatch_match_ratio": 0.14541,
+      "outer_bound": 1,
+      "element": "Кр-1.07"
     },
     {
-      "x": 2489,
-      "y": 1308,
-      "x1": 2822,
-      "y1": 1499,
+      "x": 6477,
+      "y": 1297,
+      "x1": 6820,
+      "y1": 1486,
+      "width": 343,
+      "height": 189,
+      "hatch_match_pixels": 8996,
+      "hatch_match_ratio": 0.13877,
+      "outer_bound": 1,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 5484,
+      "y": 1486,
+      "x1": 5817,
+      "y1": 1677,
       "width": 333,
       "height": 191,
-      "outer_bound": 3,
+      "hatch_match_pixels": 9633,
+      "hatch_match_ratio": 0.15146,
+      "outer_bound": 1,
       "element": "Кр-1.01"
     },
     {
-      "x": 2822,
-      "y": 1308,
-      "x1": 3152,
-      "y1": 1499,
-      "width": 330,
-      "height": 191,
-      "outer_bound": 3,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 3152,
-      "y": 1308,
-      "x1": 3481,
-      "y1": 1499,
+      "x": 5817,
+      "y": 1486,
+      "x1": 6146,
+      "y1": 1677,
       "width": 329,
       "height": 191,
-      "outer_bound": 3,
+      "hatch_match_pixels": 10185,
+      "hatch_match_ratio": 0.16208,
+      "outer_bound": 1,
       "element": "Кр-1.01"
     },
     {
-      "x": 3481,
-      "y": 1308,
-      "x1": 3822,
-      "y1": 1499,
-      "width": 341,
+      "x": 6146,
+      "y": 1486,
+      "x1": 6477,
+      "y1": 1677,
+      "width": 331,
       "height": 191,
-      "outer_bound": 3,
+      "hatch_match_pixels": 10087,
+      "hatch_match_ratio": 0.15955,
+      "outer_bound": 1,
       "element": "Кр-1.01"
     },
     {
-      "x": 2822,
-      "y": 1499,
-      "x1": 3152,
-      "y1": 1643,
-      "width": 330,
+      "x": 6477,
+      "y": 1486,
+      "x1": 6820,
+      "y1": 1677,
+      "width": 343,
+      "height": 191,
+      "hatch_match_pixels": 10024,
+      "hatch_match_ratio": 0.15301,
+      "outer_bound": 1,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 5484,
+      "y": 1677,
+      "x1": 5817,
+      "y1": 1821,
+      "width": 333,
       "height": 144,
-      "outer_bound": 3,
-      "element": "Ксп-1.01"
+      "hatch_match_pixels": 6917,
+      "hatch_match_ratio": 0.14425,
+      "outer_bound": 1,
+      "element": "Кcom-1.01"
     },
     {
-      "x": 3152,
-      "y": 1499,
-      "x1": 3481,
-      "y1": 1643,
+      "x": 5817,
+      "y": 1677,
+      "x1": 6146,
+      "y1": 1821,
       "width": 329,
       "height": 144,
+      "hatch_match_pixels": 7295,
+      "hatch_match_ratio": 0.15398,
+      "outer_bound": 1,
+      "element": "Кcom-1.01"
+    },
+    {
+      "x": 6146,
+      "y": 1677,
+      "x1": 6477,
+      "y1": 1821,
+      "width": 331,
+      "height": 144,
+      "hatch_match_pixels": 7423,
+      "hatch_match_ratio": 0.15574,
+      "outer_bound": 1,
+      "element": "Кcom-1.01"
+    },
+    {
+      "x": 6477,
+      "y": 1677,
+      "x1": 6820,
+      "y1": 1821,
+      "width": 343,
+      "height": 144,
+      "hatch_match_pixels": 7218,
+      "hatch_match_ratio": 0.14614,
+      "outer_bound": 1,
+      "element": "Кcom-1.01"
+    },
+    {
+      "x": 4114,
+      "y": 939,
+      "x1": 4447,
+      "y1": 1107,
+      "width": 333,
+      "height": 168,
+      "hatch_match_pixels": 8135,
+      "hatch_match_ratio": 0.14541,
+      "outer_bound": 2,
+      "element": "Кp-T-02"
+    },
+    {
+      "x": 4447,
+      "y": 939,
+      "x1": 4778,
+      "y1": 1107,
+      "width": 331,
+      "height": 168,
+      "hatch_match_pixels": 9168,
+      "hatch_match_ratio": 0.16487,
+      "outer_bound": 2,
+      "element": "Кp-T-02"
+    },
+    {
+      "x": 4778,
+      "y": 939,
+      "x1": 5106,
+      "y1": 1107,
+      "width": 328,
+      "height": 168,
+      "hatch_match_pixels": 8620,
+      "hatch_match_ratio": 0.15643,
+      "outer_bound": 2,
+      "element": "Кp-T-02"
+    },
+    {
+      "x": 5106,
+      "y": 939,
+      "x1": 5440,
+      "y1": 1107,
+      "width": 334,
+      "height": 168,
+      "hatch_match_pixels": 9048,
+      "hatch_match_ratio": 0.16125,
+      "outer_bound": 2,
+      "element": "Кp-T-02"
+    },
+    {
+      "x": 4114,
+      "y": 1297,
+      "x1": 4447,
+      "y1": 1486,
+      "width": 333,
+      "height": 189,
+      "hatch_match_pixels": 8604,
+      "hatch_match_ratio": 0.13671,
+      "outer_bound": 2,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 4447,
+      "y": 1297,
+      "x1": 4778,
+      "y1": 1486,
+      "width": 331,
+      "height": 189,
+      "hatch_match_pixels": 9655,
+      "hatch_match_ratio": 0.15433,
+      "outer_bound": 2,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 4778,
+      "y": 1297,
+      "x1": 5106,
+      "y1": 1486,
+      "width": 328,
+      "height": 189,
+      "hatch_match_pixels": 8331,
+      "hatch_match_ratio": 0.13439,
+      "outer_bound": 2,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 5106,
+      "y": 1297,
+      "x1": 5440,
+      "y1": 1486,
+      "width": 334,
+      "height": 189,
+      "hatch_match_pixels": 9094,
+      "hatch_match_ratio": 0.14406,
+      "outer_bound": 2,
+      "element": "Кр-1.07"
+    },
+    {
+      "x": 4114,
+      "y": 1486,
+      "x1": 4447,
+      "y1": 1677,
+      "width": 333,
+      "height": 191,
+      "hatch_match_pixels": 9406,
+      "hatch_match_ratio": 0.14789,
+      "outer_bound": 2,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 4447,
+      "y": 1486,
+      "x1": 4778,
+      "y1": 1677,
+      "width": 331,
+      "height": 191,
+      "hatch_match_pixels": 10501,
+      "hatch_match_ratio": 0.1661,
+      "outer_bound": 2,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 4778,
+      "y": 1486,
+      "x1": 5106,
+      "y1": 1677,
+      "width": 328,
+      "height": 191,
+      "hatch_match_pixels": 9440,
+      "hatch_match_ratio": 0.15068,
+      "outer_bound": 2,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 5106,
+      "y": 1486,
+      "x1": 5440,
+      "y1": 1677,
+      "width": 334,
+      "height": 191,
+      "hatch_match_pixels": 9936,
+      "hatch_match_ratio": 0.15575,
+      "outer_bound": 2,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 4114,
+      "y": 1677,
+      "x1": 4447,
+      "y1": 1824,
+      "width": 333,
+      "height": 147,
+      "hatch_match_pixels": 7643,
+      "hatch_match_ratio": 0.15614,
+      "outer_bound": 2,
+      "element": "Кcom-1.01"
+    },
+    {
+      "x": 4447,
+      "y": 1677,
+      "x1": 4778,
+      "y1": 1824,
+      "width": 331,
+      "height": 147,
+      "hatch_match_pixels": 8410,
+      "hatch_match_ratio": 0.17284,
+      "outer_bound": 2,
+      "element": "Кcom-1.01"
+    },
+    {
+      "x": 4778,
+      "y": 1677,
+      "x1": 5106,
+      "y1": 1824,
+      "width": 328,
+      "height": 147,
+      "hatch_match_pixels": 7473,
+      "hatch_match_ratio": 0.15499,
+      "outer_bound": 2,
+      "element": "Кcom-1.01"
+    },
+    {
+      "x": 5106,
+      "y": 1677,
+      "x1": 5440,
+      "y1": 1824,
+      "width": 334,
+      "height": 147,
+      "hatch_match_pixels": 7982,
+      "hatch_match_ratio": 0.16257,
+      "outer_bound": 2,
+      "element": "Кcom-1.01"
+    },
+    {
+      "x": 2743,
+      "y": 1157,
+      "x1": 3077,
+      "y1": 1297,
+      "width": 334,
+      "height": 140,
+      "hatch_match_pixels": 7350,
+      "hatch_match_ratio": 0.15719,
+      "outer_bound": 3,
+      "element": "Кр-1.03"
+    },
+    {
+      "x": 3077,
+      "y": 1157,
+      "x1": 3408,
+      "y1": 1297,
+      "width": 331,
+      "height": 140,
+      "hatch_match_pixels": 8209,
+      "hatch_match_ratio": 0.17715,
+      "outer_bound": 3,
+      "element": "Кр-1.03"
+    },
+    {
+      "x": 3408,
+      "y": 1157,
+      "x1": 3736,
+      "y1": 1297,
+      "width": 328,
+      "height": 140,
+      "hatch_match_pixels": 7344,
+      "hatch_match_ratio": 0.15993,
+      "outer_bound": 3,
+      "element": "Кр-1.03"
+    },
+    {
+      "x": 3736,
+      "y": 1157,
+      "x1": 4070,
+      "y1": 1297,
+      "width": 334,
+      "height": 140,
+      "hatch_match_pixels": 7585,
+      "hatch_match_ratio": 0.16221,
+      "outer_bound": 3,
+      "element": "Кр-1.03"
+    },
+    {
+      "x": 2743,
+      "y": 1297,
+      "x1": 3077,
+      "y1": 1487,
+      "width": 334,
+      "height": 190,
+      "hatch_match_pixels": 9152,
+      "hatch_match_ratio": 0.14422,
+      "outer_bound": 3,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 3077,
+      "y": 1297,
+      "x1": 3408,
+      "y1": 1487,
+      "width": 331,
+      "height": 190,
+      "hatch_match_pixels": 10082,
+      "hatch_match_ratio": 0.16031,
+      "outer_bound": 3,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 3408,
+      "y": 1297,
+      "x1": 3736,
+      "y1": 1487,
+      "width": 328,
+      "height": 190,
+      "hatch_match_pixels": 8875,
+      "hatch_match_ratio": 0.14241,
+      "outer_bound": 3,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 3736,
+      "y": 1297,
+      "x1": 4070,
+      "y1": 1487,
+      "width": 334,
+      "height": 190,
+      "hatch_match_pixels": 8907,
+      "hatch_match_ratio": 0.14036,
+      "outer_bound": 3,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 2743,
+      "y": 1487,
+      "x1": 3077,
+      "y1": 1677,
+      "width": 334,
+      "height": 190,
+      "hatch_match_pixels": 9546,
+      "hatch_match_ratio": 0.15043,
+      "outer_bound": 3,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 3077,
+      "y": 1487,
+      "x1": 3408,
+      "y1": 1677,
+      "width": 331,
+      "height": 190,
+      "hatch_match_pixels": 10023,
+      "hatch_match_ratio": 0.15937,
+      "outer_bound": 3,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 3408,
+      "y": 1487,
+      "x1": 3736,
+      "y1": 1677,
+      "width": 328,
+      "height": 190,
+      "hatch_match_pixels": 9184,
+      "hatch_match_ratio": 0.14737,
+      "outer_bound": 3,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 3736,
+      "y": 1487,
+      "x1": 4070,
+      "y1": 1677,
+      "width": 334,
+      "height": 190,
+      "hatch_match_pixels": 9447,
+      "hatch_match_ratio": 0.14887,
+      "outer_bound": 3,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 2743,
+      "y": 1677,
+      "x1": 3077,
+      "y1": 1821,
+      "width": 334,
+      "height": 144,
+      "hatch_match_pixels": 7154,
+      "hatch_match_ratio": 0.14874,
+      "outer_bound": 3,
+      "element": "Кgm-1.01"
+    },
+    {
+      "x": 3077,
+      "y": 1677,
+      "x1": 3408,
+      "y1": 1821,
+      "width": 331,
+      "height": 144,
+      "hatch_match_pixels": 7810,
+      "hatch_match_ratio": 0.16386,
+      "outer_bound": 3,
+      "element": "Ксп-1.07"
+    },
+    {
+      "x": 3408,
+      "y": 1677,
+      "x1": 3736,
+      "y1": 1821,
+      "width": 328,
+      "height": 144,
+      "hatch_match_pixels": 6928,
+      "hatch_match_ratio": 0.14668,
+      "outer_bound": 3,
+      "element": "Ксп-1.01"
+    },
+    {
+      "x": 3736,
+      "y": 1677,
+      "x1": 4070,
+      "y1": 1821,
+      "width": 334,
+      "height": 144,
+      "hatch_match_pixels": 7133,
+      "hatch_match_ratio": 0.14831,
       "outer_bound": 3,
       "element": "Кcom-1.01"
     },
     {
-      "x": 3481,
-      "y": 1499,
-      "x1": 3822,
-      "y1": 1643,
-      "width": 341,
-      "height": 144,
-      "outer_bound": 3,
-      "element": "Кcm-1.04"
-    },
-    {
-      "x": 4526,
-      "y": 3167,
-      "x1": 4859,
-      "y1": 3331,
-      "width": 333,
-      "height": 164,
-      "outer_bound": 4,
-      "element": "Spy-02"
-    },
-    {
-      "x": 4859,
-      "y": 3167,
-      "x1": 5190,
-      "y1": 3331,
-      "width": 331,
-      "height": 164,
-      "outer_bound": 4,
-      "element": "Кр-10"
-    },
-    {
-      "x": 5190,
-      "y": 3167,
-      "x1": 5518,
-      "y1": 3331,
-      "width": 328,
-      "height": 164,
-      "outer_bound": 4,
-      "element": "р-р-1"
-    },
-    {
-      "x": 5518,
-      "y": 3167,
-      "x1": 5852,
-      "y1": 3331,
+      "x": 1373,
+      "y": 1376,
+      "x1": 1707,
+      "y1": 1485,
       "width": 334,
-      "height": 164,
+      "height": 109,
+      "hatch_match_pixels": 5215,
+      "hatch_match_ratio": 0.14325,
       "outer_bound": 4,
-      "element": "Кр-1.07"
+      "element": "Кр-1.04"
     },
     {
-      "x": 4526,
-      "y": 3521,
-      "x1": 4859,
-      "y1": 3711,
+      "x": 1707,
+      "y": 1376,
+      "x1": 2037,
+      "y1": 1485,
+      "width": 330,
+      "height": 109,
+      "hatch_match_pixels": 5536,
+      "hatch_match_ratio": 0.15391,
+      "outer_bound": 4,
+      "element": "Кр-1.04"
+    },
+    {
+      "x": 2037,
+      "y": 1376,
+      "x1": 2367,
+      "y1": 1485,
+      "width": 330,
+      "height": 109,
+      "hatch_match_pixels": 5029,
+      "hatch_match_ratio": 0.13981,
+      "outer_bound": 4,
+      "element": "Кр-1.04"
+    },
+    {
+      "x": 2367,
+      "y": 1376,
+      "x1": 2700,
+      "y1": 1485,
       "width": 333,
-      "height": 190,
+      "height": 109,
+      "hatch_match_pixels": 5105,
+      "hatch_match_ratio": 0.14065,
       "outer_bound": 4,
-      "element": "Кр-1.07"
+      "element": "Кр-1.04"
     },
     {
-      "x": 4859,
-      "y": 3521,
-      "x1": 5190,
-      "y1": 3711,
-      "width": 331,
-      "height": 190,
-      "outer_bound": 4,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 5190,
-      "y": 3521,
-      "x1": 5518,
-      "y1": 3711,
-      "width": 328,
-      "height": 190,
-      "outer_bound": 4,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 5518,
-      "y": 3521,
-      "x1": 5852,
-      "y1": 3711,
+      "x": 1373,
+      "y": 1485,
+      "x1": 1707,
+      "y1": 1677,
       "width": 334,
-      "height": 190,
+      "height": 192,
+      "hatch_match_pixels": 10280,
+      "hatch_match_ratio": 0.1603,
       "outer_bound": 4,
-      "element": "Кр-1.07"
+      "element": "Кр-1.01"
     },
     {
-      "x": 4526,
-      "y": 3711,
-      "x1": 4859,
-      "y1": 3901,
+      "x": 1707,
+      "y": 1485,
+      "x1": 2037,
+      "y1": 1677,
+      "width": 330,
+      "height": 192,
+      "hatch_match_pixels": 10512,
+      "hatch_match_ratio": 0.16591,
+      "outer_bound": 4,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 2037,
+      "y": 1485,
+      "x1": 2367,
+      "y1": 1677,
+      "width": 330,
+      "height": 192,
+      "hatch_match_pixels": 10354,
+      "hatch_match_ratio": 0.16342,
+      "outer_bound": 4,
+      "element": "Кр-1.01"
+    },
+    {
+      "x": 2367,
+      "y": 1485,
+      "x1": 2700,
+      "y1": 1677,
       "width": 333,
-      "height": 190,
+      "height": 192,
+      "hatch_match_pixels": 10018,
+      "hatch_match_ratio": 0.15669,
       "outer_bound": 4,
-      "element": "Кр-1.07"
+      "element": "Кр-1.01"
     },
     {
-      "x": 4859,
-      "y": 3711,
-      "x1": 5190,
-      "y1": 3901,
-      "width": 331,
-      "height": 190,
-      "outer_bound": 4,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 5190,
-      "y": 3711,
-      "x1": 5518,
-      "y1": 3901,
-      "width": 328,
-      "height": 190,
-      "outer_bound": 4,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 5518,
-      "y": 3711,
-      "x1": 5852,
-      "y1": 3901,
+      "x": 1373,
+      "y": 1677,
+      "x1": 1707,
+      "y1": 1824,
       "width": 334,
-      "height": 190,
-      "outer_bound": 4,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 4526,
-      "y": 3901,
-      "x1": 4859,
-      "y1": 4048,
-      "width": 333,
       "height": 147,
+      "hatch_match_pixels": 7881,
+      "hatch_match_ratio": 0.16052,
       "outer_bound": 4,
-      "element": "Кam-1.01"
+      "element": "ecm-1.01"
     },
     {
-      "x": 4859,
-      "y": 3901,
-      "x1": 5190,
-      "y1": 4048,
-      "width": 331,
+      "x": 1707,
+      "y": 1677,
+      "x1": 2037,
+      "y1": 1824,
+      "width": 330,
       "height": 147,
+      "hatch_match_pixels": 8228,
+      "hatch_match_ratio": 0.16961,
       "outer_bound": 4,
       "element": "Кcom-1.01"
     },
     {
-      "x": 5190,
-      "y": 3901,
-      "x1": 5518,
-      "y1": 4048,
-      "width": 328,
+      "x": 2037,
+      "y": 1677,
+      "x1": 2367,
+      "y1": 1824,
+      "width": 330,
       "height": 147,
+      "hatch_match_pixels": 7808,
+      "hatch_match_ratio": 0.16096,
       "outer_bound": 4,
-      "element": "Кom-1.01"
+      "element": "Ксп-10"
     },
     {
-      "x": 5518,
-      "y": 3901,
-      "x1": 5852,
-      "y1": 4048,
-      "width": 334,
+      "x": 2367,
+      "y": 1677,
+      "x1": 2700,
+      "y1": 1824,
+      "width": 333,
       "height": 147,
+      "hatch_match_pixels": 7299,
+      "hatch_match_ratio": 0.14911,
       "outer_bound": 4,
-      "element": "Кcm-1.01"
-    },
-    {
-      "x": 3155,
-      "y": 3381,
-      "x1": 3489,
-      "y1": 3521,
-      "width": 334,
-      "height": 140,
-      "outer_bound": 5,
-      "element": "Кр-1.03"
-    },
-    {
-      "x": 3489,
-      "y": 3381,
-      "x1": 3818,
-      "y1": 3521,
-      "width": 329,
-      "height": 140,
-      "outer_bound": 5,
-      "element": "Кр-1.03"
-    },
-    {
-      "x": 3818,
-      "y": 3381,
-      "x1": 4149,
-      "y1": 3521,
-      "width": 331,
-      "height": 140,
-      "outer_bound": 5,
-      "element": "Кр-1.03"
-    },
-    {
-      "x": 4149,
-      "y": 3381,
-      "x1": 4482,
-      "y1": 3521,
-      "width": 333,
-      "height": 140,
-      "outer_bound": 5,
-      "element": "Кр-1.03"
-    },
-    {
-      "x": 3155,
-      "y": 3521,
-      "x1": 3489,
-      "y1": 3711,
-      "width": 334,
-      "height": 190,
-      "outer_bound": 5,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 3489,
-      "y": 3521,
-      "x1": 3818,
-      "y1": 3711,
-      "width": 329,
-      "height": 190,
-      "outer_bound": 5,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 3818,
-      "y": 3521,
-      "x1": 4149,
-      "y1": 3711,
-      "width": 331,
-      "height": 190,
-      "outer_bound": 5,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 4149,
-      "y": 3521,
-      "x1": 4482,
-      "y1": 3711,
-      "width": 333,
-      "height": 190,
-      "outer_bound": 5,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 3155,
-      "y": 3711,
-      "x1": 3489,
-      "y1": 3900,
-      "width": 334,
-      "height": 189,
-      "outer_bound": 5,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 3489,
-      "y": 3711,
-      "x1": 3818,
-      "y1": 3900,
-      "width": 329,
-      "height": 189,
-      "outer_bound": 5,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 3818,
-      "y": 3711,
-      "x1": 4149,
-      "y1": 3900,
-      "width": 331,
-      "height": 189,
-      "outer_bound": 5,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 4149,
-      "y": 3711,
-      "x1": 4482,
-      "y1": 3900,
-      "width": 333,
-      "height": 189,
-      "outer_bound": 5,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 3155,
-      "y": 3900,
-      "x1": 3489,
-      "y1": 4048,
-      "width": 334,
-      "height": 148,
-      "outer_bound": 5,
-      "element": "Кут-1.01"
-    },
-    {
-      "x": 3489,
-      "y": 3900,
-      "x1": 3818,
-      "y1": 4048,
-      "width": 329,
-      "height": 148,
-      "outer_bound": 5,
-      "element": "Ксп-1.01"
-    },
-    {
-      "x": 3818,
-      "y": 3900,
-      "x1": 4149,
-      "y1": 4048,
-      "width": 331,
-      "height": 148,
-      "outer_bound": 5,
-      "element": "Кom-1.01"
-    },
-    {
-      "x": 4149,
-      "y": 3900,
-      "x1": 4482,
-      "y1": 4048,
-      "width": 333,
-      "height": 148,
-      "outer_bound": 5,
-      "element": "Кcom-1.01"
-    },
-    {
-      "x": 3860,
-      "y": 979,
-      "x1": 4192,
-      "y1": 1117,
-      "width": 332,
-      "height": 138,
-      "outer_bound": 6,
-      "element": "Кр-1.03"
-    },
-    {
-      "x": 4192,
-      "y": 979,
-      "x1": 4522,
-      "y1": 1117,
-      "width": 330,
-      "height": 138,
-      "outer_bound": 6,
-      "element": "Кр-1.03"
-    },
-    {
-      "x": 4522,
-      "y": 979,
-      "x1": 4851,
-      "y1": 1117,
-      "width": 329,
-      "height": 138,
-      "outer_bound": 6,
-      "element": "Кр-1.03"
-    },
-    {
-      "x": 4851,
-      "y": 979,
-      "x1": 5186,
-      "y1": 1117,
-      "width": 335,
-      "height": 138,
-      "outer_bound": 6,
-      "element": "Кр-1.03"
-    },
-    {
-      "x": 3860,
-      "y": 1117,
-      "x1": 4192,
-      "y1": 1308,
-      "width": 332,
-      "height": 191,
-      "outer_bound": 6,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 4192,
-      "y": 1117,
-      "x1": 4522,
-      "y1": 1308,
-      "width": 330,
-      "height": 191,
-      "outer_bound": 6,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 4522,
-      "y": 1117,
-      "x1": 4851,
-      "y1": 1308,
-      "width": 329,
-      "height": 191,
-      "outer_bound": 6,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 4851,
-      "y": 1117,
-      "x1": 5186,
-      "y1": 1308,
-      "width": 335,
-      "height": 191,
-      "outer_bound": 6,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 3860,
-      "y": 1308,
-      "x1": 4192,
-      "y1": 1499,
-      "width": 332,
-      "height": 191,
-      "outer_bound": 6,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 4192,
-      "y": 1308,
-      "x1": 4522,
-      "y1": 1499,
-      "width": 330,
-      "height": 191,
-      "outer_bound": 6,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 4522,
-      "y": 1308,
-      "x1": 4851,
-      "y1": 1499,
-      "width": 329,
-      "height": 191,
-      "outer_bound": 6,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 4851,
-      "y": 1308,
-      "x1": 5186,
-      "y1": 1499,
-      "width": 335,
-      "height": 191,
-      "outer_bound": 6,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 4522,
-      "y": 1499,
-      "x1": 4851,
-      "y1": 1646,
-      "width": 329,
-      "height": 147,
-      "outer_bound": 6,
-      "element": "Кcom-1.01"
-    },
-    {
-      "x": 4851,
-      "y": 1499,
-      "x1": 5186,
-      "y1": 1646,
-      "width": 335,
-      "height": 147,
-      "outer_bound": 6,
-      "element": "Кcom-1.04"
-    },
-    {
-      "x": 5230,
-      "y": 1194,
-      "x1": 5563,
-      "y1": 1307,
-      "width": 333,
-      "height": 113,
-      "outer_bound": 7,
-      "element": "Жр-1.04"
-    },
-    {
-      "x": 5563,
-      "y": 1194,
-      "x1": 5892,
-      "y1": 1307,
-      "width": 329,
-      "height": 113,
-      "outer_bound": 7,
-      "element": "Кр-1.07"
-    },
-    {
-      "x": 5892,
-      "y": 1194,
-      "x1": 6222,
-      "y1": 1307,
-      "width": 330,
-      "height": 113,
-      "outer_bound": 7,
-      "element": "Кр-1047"
-    },
-    {
-      "x": 6222,
-      "y": 1194,
-      "x1": 6556,
-      "y1": 1307,
-      "width": 334,
-      "height": 113,
-      "outer_bound": 7,
-      "element": "Кр-1067"
-    },
-    {
-      "x": 5230,
-      "y": 1307,
-      "x1": 5563,
-      "y1": 1499,
-      "width": 333,
-      "height": 192,
-      "outer_bound": 7,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 5563,
-      "y": 1307,
-      "x1": 5892,
-      "y1": 1499,
-      "width": 329,
-      "height": 192,
-      "outer_bound": 7,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 5892,
-      "y": 1307,
-      "x1": 6222,
-      "y1": 1499,
-      "width": 330,
-      "height": 192,
-      "outer_bound": 7,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 6222,
-      "y": 1307,
-      "x1": 6556,
-      "y1": 1499,
-      "width": 334,
-      "height": 192,
-      "outer_bound": 7,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 5230,
-      "y": 1499,
-      "x1": 5563,
-      "y1": 1643,
-      "width": 333,
-      "height": 144,
-      "outer_bound": 7,
-      "element": "Ксп-1.01"
-    },
-    {
-      "x": 5563,
-      "y": 1499,
-      "x1": 5892,
-      "y1": 1643,
-      "width": 329,
-      "height": 144,
-      "outer_bound": 7,
-      "element": "Ксп-1.01"
-    },
-    {
-      "x": 5892,
-      "y": 1499,
-      "x1": 6222,
-      "y1": 1643,
-      "width": 330,
-      "height": 144,
-      "outer_bound": 7,
-      "element": "Ксп-1.01"
-    },
-    {
-      "x": 6222,
-      "y": 1499,
-      "x1": 6556,
-      "y1": 1643,
-      "width": 334,
-      "height": 144,
-      "outer_bound": 7,
-      "element": "Ксп-1.01"
-    },
-    {
-      "x": 1785,
-      "y": 3600,
-      "x1": 2118,
-      "y1": 3710,
-      "width": 333,
-      "height": 110,
-      "outer_bound": 8,
-      "element": "Кр-1.04"
-    },
-    {
-      "x": 2118,
-      "y": 3600,
-      "x1": 2449,
-      "y1": 3710,
-      "width": 331,
-      "height": 110,
-      "outer_bound": 8,
-      "element": "Кр-1.04"
-    },
-    {
-      "x": 2449,
-      "y": 3600,
-      "x1": 2778,
-      "y1": 3710,
-      "width": 329,
-      "height": 110,
-      "outer_bound": 8,
-      "element": "Кр-1.04"
-    },
-    {
-      "x": 2778,
-      "y": 3600,
-      "x1": 3112,
-      "y1": 3710,
-      "width": 334,
-      "height": 110,
-      "outer_bound": 8,
-      "element": "Кр-1.04"
-    },
-    {
-      "x": 1785,
-      "y": 3710,
-      "x1": 2118,
-      "y1": 3901,
-      "width": 333,
-      "height": 191,
-      "outer_bound": 8,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 2118,
-      "y": 3710,
-      "x1": 2449,
-      "y1": 3901,
-      "width": 331,
-      "height": 191,
-      "outer_bound": 8,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 2449,
-      "y": 3710,
-      "x1": 2778,
-      "y1": 3901,
-      "width": 329,
-      "height": 191,
-      "outer_bound": 8,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 2778,
-      "y": 3710,
-      "x1": 3112,
-      "y1": 3901,
-      "width": 334,
-      "height": 191,
-      "outer_bound": 8,
-      "element": "Кр-1.01"
-    },
-    {
-      "x": 1785,
-      "y": 3901,
-      "x1": 2118,
-      "y1": 4048,
-      "width": 333,
-      "height": 147,
-      "outer_bound": 8,
-      "element": "Ксп-1.01"
-    },
-    {
-      "x": 2118,
-      "y": 3901,
-      "x1": 2449,
-      "y1": 4048,
-      "width": 331,
-      "height": 147,
-      "outer_bound": 8,
-      "element": "Кcom-1.07"
-    },
-    {
-      "x": 2449,
-      "y": 3901,
-      "x1": 2778,
-      "y1": 4048,
-      "width": 329,
-      "height": 147,
-      "outer_bound": 8,
-      "element": "Кom-10"
-    },
-    {
-      "x": 2778,
-      "y": 3901,
-      "x1": 3112,
-      "y1": 4048,
-      "width": 334,
-      "height": 147,
-      "outer_bound": 8,
-      "element": "Ксп-1.0"
+      "element": "Ксп-1.07"
     }
   ],
   "size_source_bounds": [
     {
-      "x": 6560,
-      "y": 3331,
-      "x1": 6889,
-      "y1": 3521,
-      "width": 329,
-      "height": 190,
-      "outer_bound": 1,
-      "element": "Кр-1.07",
-      "vertical_dimension": "800",
-      "horizontal_dimension": "1390"
-    },
-    {
-      "x": 6560,
-      "y": 3521,
-      "x1": 6889,
-      "y1": 3711,
-      "width": 329,
-      "height": 190,
+      "x": 6146,
+      "y": 1105,
+      "x1": 6477,
+      "y1": 1297,
+      "width": 331,
+      "height": 192,
+      "hatch_match_pixels": 10187,
+      "hatch_match_ratio": 0.16029,
       "outer_bound": 1,
       "element": "Кр-1.01",
       "vertical_dimension": "800",
       "horizontal_dimension": "1390"
     },
     {
-      "x": 1452,
-      "y": 1499,
-      "x1": 1782,
-      "y1": 1646,
-      "width": 330,
-      "height": 147,
-      "outer_bound": 2,
-      "element": "Ксп-1.01",
-      "vertical_dimension": "619",
+      "x": 6146,
+      "y": 1297,
+      "x1": 6477,
+      "y1": 1486,
+      "width": 331,
+      "height": 189,
+      "hatch_match_pixels": 9097,
+      "hatch_match_ratio": 0.14541,
+      "outer_bound": 1,
+      "element": "Кр-1.07",
+      "vertical_dimension": "800",
       "horizontal_dimension": "1390"
     },
     {
-      "x": 5190,
-      "y": 3901,
-      "x1": 5518,
-      "y1": 4048,
+      "x": 6146,
+      "y": 1677,
+      "x1": 6477,
+      "y1": 1821,
+      "width": 331,
+      "height": 144,
+      "hatch_match_pixels": 7423,
+      "hatch_match_ratio": 0.15574,
+      "outer_bound": 1,
+      "element": "Кcom-1.01",
+      "vertical_dimension": "610",
+      "horizontal_dimension": "1390"
+    },
+    {
+      "x": 3408,
+      "y": 1677,
+      "x1": 3736,
+      "y1": 1821,
       "width": 328,
-      "height": 147,
-      "outer_bound": 4,
-      "element": "Кom-1.01",
+      "height": 144,
+      "hatch_match_pixels": 6928,
+      "hatch_match_ratio": 0.14668,
+      "outer_bound": 3,
+      "element": "Ксп-1.01",
       "vertical_dimension": "610",
       "horizontal_dimension": "1390"
     }
