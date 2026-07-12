@@ -920,6 +920,498 @@ def add_area_totals(unique_elements: dict[str, dict[str, object]]) -> float:
     return round(total_area_m2, 3)
 
 
+def add_average_bound_sizes(
+    unique_elements: dict[str, dict[str, object]],
+    all_labeled_bounds: list[dict[str, object]],
+) -> None:
+    """Attach average bound width, height, and area in pixels to every bucket."""
+    for element, values in unique_elements.items():
+        bounds = [bound for bound in all_labeled_bounds if bound.get("element") == element]
+        if not bounds:
+            values["average_bound_size_px"] = None
+            values["average_bound_area_px"] = None
+            continue
+        average_width = float(np.mean([int(bound["width"]) for bound in bounds]))
+        average_height = float(np.mean([int(bound["height"]) for bound in bounds]))
+        average_area = float(np.mean([int(bound["width"]) * int(bound["height"]) for bound in bounds]))
+        values["average_bound_size_px"] = {
+            "width": round(average_width, 2),
+            "height": round(average_height, 2),
+        }
+        values["average_bound_area_px"] = round(average_area, 2)
+
+
+def merge_correction_step(
+    unique_elements: dict[str, dict[str, object]],
+    all_labeled_bounds: list[dict[str, object]],
+    validated_inner_bounds: list[dict[str, object]],
+    tolerance_mm: float,
+) -> list[dict[str, object]]:
+    """Merge singleton OCR failures into a geometrically matching known group."""
+    print("MERGE CORRECTION: starting correction bounds analysis")
+    bounds_by_element: dict[str, list[dict[str, object]]] = {}
+    for bound in all_labeled_bounds:
+        element = str(bound.get("element", ""))
+        if element:
+            bounds_by_element.setdefault(element, []).append(bound)
+
+    reliable: list[dict[str, object]] = []
+    for element, values in unique_elements.items():
+        horizontal = values.get("horizontal_dimensions", [])
+        vertical = values.get("vertical_dimensions", [])
+        element_bounds = bounds_by_element.get(element, [])
+        if int(values.get("count", 0)) == 1 or len(horizontal) != 1 or len(vertical) != 1 or not element_bounds:
+            continue
+        reliable.append({
+            "element": element,
+            "count": int(values.get("count", 0)),
+            "width_mm": float(str(horizontal[0])),
+            "height_mm": float(str(vertical[0])),
+            "width_px": float(np.median([int(bound["width"]) for bound in element_bounds])),
+            "height_px": float(np.median([int(bound["height"]) for bound in element_bounds])),
+        })
+    reliable.sort(key=lambda item: (-int(item["count"]), str(item["element"])))
+    print(
+        "MERGE CORRECTION baskets sorted by count: "
+        + ", ".join(f"{item['element']}={item['count']}" for item in reliable)
+    )
+
+    suspicious = [
+        element
+        for element, values in unique_elements.items()
+        if int(values.get("count", 0)) == 1
+        and not values.get("horizontal_dimensions")
+        and not values.get("vertical_dimensions")
+    ]
+    corrections: list[dict[str, object]] = []
+    for suspicious_element in suspicious:
+        element_bounds = bounds_by_element.get(suspicious_element, [])
+        if len(element_bounds) != 1:
+            continue
+        bound = element_bounds[0]
+        print(
+            "MERGE CORRECTION suspicious: "
+            f"element={suspicious_element}, outer_bound={bound.get('outer_bound')}, "
+            f"bbox=({bound['x']}, {bound['y']}, {bound['width']}, {bound['height']}), sizes=not found"
+        )
+        match: dict[str, object] | None = None
+        closest_distance = math.inf
+        for basket_index, reference in enumerate(reliable, start=1):
+            target_element = str(reference["element"])
+            inferred_width_mm = int(bound["width"]) * reference["width_mm"] / reference["width_px"]
+            inferred_height_mm = int(bound["height"]) * reference["height_mm"] / reference["height_px"]
+            width_diff_mm = abs(inferred_width_mm - reference["width_mm"])
+            height_diff_mm = abs(inferred_height_mm - reference["height_mm"])
+            distance_mm = math.hypot(width_diff_mm, height_diff_mm)
+            print(
+                f"MERGE CORRECTION compare: suspicious={suspicious_element}, "
+                f"basket={target_element}, basket_count={reference['count']}, order={basket_index}, "
+                f"delta=({width_diff_mm:.2f} mm, {height_diff_mm:.2f} mm), distance={distance_mm:.2f} mm"
+            )
+            if distance_mm < closest_distance:
+                closest_distance = distance_mm
+                match = {
+                    "target_element": target_element,
+                    "target_count_before_merge": int(unique_elements[target_element]["count"]),
+                    "basket_order": basket_index,
+                    "width_diff_mm": width_diff_mm,
+                    "height_diff_mm": height_diff_mm,
+                    "euclidean_distance_mm": distance_mm,
+                }
+        if match is None or closest_distance > tolerance_mm:
+            print(f"MERGE CORRECTION skipped: element={suspicious_element}, no geometry match within {tolerance_mm:g} mm")
+            continue
+
+        target_element = str(match["target_element"])
+        unique_elements[target_element]["count"] = int(unique_elements[target_element]["count"]) + 1
+        del unique_elements[suspicious_element]
+        bound["original_element"] = suspicious_element
+        bound["element"] = target_element
+        for validated in validated_inner_bounds:
+            if (
+                validated.get("element") == suspicious_element
+                and int(validated["x"]) == int(bound["x"])
+                and int(validated["y"]) == int(bound["y"])
+            ):
+                validated["original_element"] = suspicious_element
+                validated["element"] = target_element
+        correction = {
+            "from_element": suspicious_element,
+            "to_element": target_element,
+            "bound": {key: bound[key] for key in ("x", "y", "x1", "y1", "width", "height", "outer_bound")},
+            "basket_order": int(match["basket_order"]),
+            "target_count_before_merge": int(match["target_count_before_merge"]),
+            "target_count_after_merge": int(unique_elements[target_element]["count"]),
+            "width_diff_mm": round(float(match["width_diff_mm"]), 2),
+            "height_diff_mm": round(float(match["height_diff_mm"]), 2),
+            "euclidean_distance_mm": round(float(match["euclidean_distance_mm"]), 2),
+        }
+        corrections.append(correction)
+        print(
+            f"MERGE CORRECTION merged: {suspicious_element} -> {target_element}, "
+            f"delta=({correction['width_diff_mm']} mm, {correction['height_diff_mm']} mm), "
+            f"distance={correction['euclidean_distance_mm']} mm"
+        )
+    print(f"MERGE CORRECTION: completed, merged={len(corrections)}, suspicious={len(suspicious)}")
+    return corrections
+
+
+def merge_buckets_by_bound_size(
+    unique_elements: dict[str, dict[str, object]],
+    all_labeled_bounds: list[dict[str, object]],
+    validated_inner_bounds: list[dict[str, object]],
+    size_source_bounds: list[dict[str, object]],
+    tolerance_mm: float,
+) -> list[dict[str, object]]:
+    """Merge whole OCR buckets into larger buckets with matching bound sizes."""
+    print("BUCKETS MERGE: starting bounds-size bucket merge")
+
+    def current_bounds(element: str) -> list[dict[str, object]]:
+        return [bound for bound in all_labeled_bounds if bound.get("element") == element]
+
+    ordered_elements = sorted(
+        unique_elements,
+        key=lambda element: (-int(unique_elements[element].get("count", 0)), element),
+    )
+    print(
+        "BUCKETS MERGE buckets sorted by count: "
+        + ", ".join(f"{element}={unique_elements[element].get('count', 0)}" for element in ordered_elements)
+    )
+    canonical: list[str] = []
+    merges: list[dict[str, object]] = []
+    for source_element in ordered_elements:
+        if source_element not in unique_elements:
+            continue
+        source_bounds = current_bounds(source_element)
+        if not source_bounds:
+            canonical.append(source_element)
+            continue
+        source_width_px = float(np.median([int(bound["width"]) for bound in source_bounds]))
+        source_height_px = float(np.median([int(bound["height"]) for bound in source_bounds]))
+        matched_target: str | None = None
+        match_info: dict[str, float] = {}
+        closest_distance = math.inf
+        for target_element in canonical:
+            if target_element not in unique_elements:
+                continue
+            target_values = unique_elements[target_element]
+            horizontal = target_values.get("horizontal_dimensions", [])
+            vertical = target_values.get("vertical_dimensions", [])
+            target_bounds = current_bounds(target_element)
+            if len(horizontal) != 1 or len(vertical) != 1 or not target_bounds:
+                continue
+            target_width_px = float(np.median([int(bound["width"]) for bound in target_bounds]))
+            target_height_px = float(np.median([int(bound["height"]) for bound in target_bounds]))
+            target_width_mm = float(str(horizontal[0]))
+            target_height_mm = float(str(vertical[0]))
+            inferred_width_mm = source_width_px * target_width_mm / target_width_px
+            inferred_height_mm = source_height_px * target_height_mm / target_height_px
+            width_diff_mm = abs(inferred_width_mm - target_width_mm)
+            height_diff_mm = abs(inferred_height_mm - target_height_mm)
+            distance_mm = math.hypot(width_diff_mm, height_diff_mm)
+            print(
+                f"BUCKETS MERGE compare: source={source_element}, target={target_element}, "
+                f"target_count={target_values.get('count', 0)}, "
+                f"delta=({width_diff_mm:.2f} mm, {height_diff_mm:.2f} mm), distance={distance_mm:.2f} mm"
+            )
+            if distance_mm < closest_distance:
+                closest_distance = distance_mm
+                matched_target = target_element
+                match_info = {
+                    "source_width_px": source_width_px,
+                    "source_height_px": source_height_px,
+                    "target_width_px": target_width_px,
+                    "target_height_px": target_height_px,
+                    "width_diff_mm": width_diff_mm,
+                    "height_diff_mm": height_diff_mm,
+                    "euclidean_distance_mm": distance_mm,
+                }
+        if matched_target is None or closest_distance > tolerance_mm:
+            canonical.append(source_element)
+            continue
+
+        source_count = int(unique_elements[source_element].get("count", 0))
+        target_count_before = int(unique_elements[matched_target].get("count", 0))
+        unique_elements[matched_target]["count"] = target_count_before + source_count
+        del unique_elements[source_element]
+        for collection in (all_labeled_bounds, validated_inner_bounds, size_source_bounds):
+            for bound in collection:
+                if bound.get("element") == source_element:
+                    bound.setdefault("original_element", source_element)
+                    bound["element"] = matched_target
+        merge = {
+            "from_bucket": source_element,
+            "to_bucket": matched_target,
+            "source_count": source_count,
+            "target_count_before_merge": target_count_before,
+            "target_count_after_merge": target_count_before + source_count,
+            "source_median_bound_px": [round(match_info["source_width_px"], 2), round(match_info["source_height_px"], 2)],
+            "target_median_bound_px": [round(match_info["target_width_px"], 2), round(match_info["target_height_px"], 2)],
+            "width_diff_mm": round(match_info["width_diff_mm"], 2),
+            "height_diff_mm": round(match_info["height_diff_mm"], 2),
+            "euclidean_distance_mm": round(match_info["euclidean_distance_mm"], 2),
+        }
+        merges.append(merge)
+        print(
+            f"BUCKETS MERGE merged: {source_element} -> {matched_target}, "
+            f"count={source_count}, delta=({merge['width_diff_mm']} mm, {merge['height_diff_mm']} mm), "
+            f"distance={merge['euclidean_distance_mm']} mm"
+        )
+    print(f"BUCKETS MERGE: completed, merged_buckets={len(merges)}, remaining_buckets={len(unique_elements)}")
+    return merges
+
+
+def final_merge_buckets_by_sorted_bounds(
+    unique_elements: dict[str, dict[str, object]],
+    all_labeled_bounds: list[dict[str, object]],
+    validated_inner_bounds: list[dict[str, object]],
+    size_source_bounds: list[dict[str, object]],
+    tolerance_px: float,
+) -> list[dict[str, object]]:
+    """Final pass: sort buckets by median bound size and merge close clusters."""
+    print("FINAL BUCKETS MERGE: starting size-sorted merge")
+
+    records: list[dict[str, object]] = []
+    for element, values in unique_elements.items():
+        bounds = [bound for bound in all_labeled_bounds if bound.get("element") == element]
+        if not bounds:
+            continue
+        width_px = float(np.median([int(bound["width"]) for bound in bounds]))
+        height_px = float(np.median([int(bound["height"]) for bound in bounds]))
+        records.append(
+            {
+                "element": element,
+                "count": int(values.get("count", 0)),
+                "width_px": width_px,
+                "height_px": height_px,
+                "area_px": width_px * height_px,
+                "has_size": bool(values.get("horizontal_dimensions") and values.get("vertical_dimensions")),
+            }
+        )
+    records.sort(key=lambda item: (float(item["area_px"]), float(item["width_px"]), float(item["height_px"]), str(item["element"])))
+    for index, record in enumerate(records, start=1):
+        print(
+            f"FINAL BUCKETS MERGE sorted[{index}]: element={record['element']}, count={record['count']}, "
+            f"median_bound={record['width_px']:.2f}x{record['height_px']:.2f}px, area={record['area_px']:.2f}px2"
+        )
+
+    canonical: list[dict[str, object]] = []
+    merges: list[dict[str, object]] = []
+    for source in records:
+        source_element = str(source["element"])
+        if source_element not in unique_elements:
+            continue
+        target: dict[str, object] | None = None
+        closest_distance = math.inf
+        for candidate in canonical:
+            width_diff = abs(float(source["width_px"]) - float(candidate["width_px"]))
+            height_diff = abs(float(source["height_px"]) - float(candidate["height_px"]))
+            distance = math.hypot(width_diff, height_diff)
+            print(
+                f"FINAL BUCKETS MERGE compare: source={source_element}, target={candidate['element']}, "
+                f"delta=({width_diff:.2f}px, {height_diff:.2f}px), distance={distance:.2f}px"
+            )
+            if distance < closest_distance:
+                closest_distance = distance
+                target = candidate
+        if target is None or closest_distance > tolerance_px:
+            canonical.append(source)
+            continue
+        target_element = str(target["element"])
+        width_diff = abs(float(source["width_px"]) - float(target["width_px"]))
+        height_diff = abs(float(source["height_px"]) - float(target["height_px"]))
+        source_count = int(unique_elements[source_element].get("count", 0))
+        target_count_before = int(unique_elements[target_element].get("count", 0))
+        unique_elements[target_element]["count"] = target_count_before + source_count
+        del unique_elements[source_element]
+        changed_bounds = 0
+        for collection in (all_labeled_bounds, validated_inner_bounds, size_source_bounds):
+            for bound in collection:
+                if bound.get("element") == source_element:
+                    bound.setdefault("original_element", source_element)
+                    bound["element"] = target_element
+                    if collection is all_labeled_bounds:
+                        changed_bounds += 1
+        merge = {
+            "from_bucket": source_element,
+            "to_bucket": target_element,
+            "reason": f"closest Euclidean distance {closest_distance:.2f}px within {tolerance_px:g}px tolerance",
+            "source_count": source_count,
+            "target_count_before_merge": target_count_before,
+            "target_count_after_merge": target_count_before + source_count,
+            "changed_bounds": changed_bounds,
+            "source_median_bound_px": [round(float(source["width_px"]), 2), round(float(source["height_px"]), 2)],
+            "target_median_bound_px": [round(float(target["width_px"]), 2), round(float(target["height_px"]), 2)],
+            "width_diff_px": round(width_diff, 2),
+            "height_diff_px": round(height_diff, 2),
+            "euclidean_distance_px": round(closest_distance, 2),
+        }
+        merges.append(merge)
+        print(
+            f"FINAL BUCKETS MERGE merged: {source_element} -> {target_element}; "
+            f"distance={closest_distance:.2f}px; count {target_count_before}+{source_count}="
+            f"{target_count_before + source_count}; renamed_bounds={changed_bounds}"
+        )
+    print(
+        f"FINAL BUCKETS MERGE: completed, canonical_buckets={len(canonical)}, "
+        f"merged_buckets={len(merges)}, remaining_buckets={len(unique_elements)}"
+    )
+    return merges
+
+
+def merge_unresolved_bounds_with_buckets(
+    unique_elements: dict[str, dict[str, object]],
+    all_labeled_bounds: list[dict[str, object]],
+    validated_inner_bounds: list[dict[str, object]],
+    size_source_bounds: list[dict[str, object]],
+    tolerance_px: float,
+) -> dict[str, list[dict[str, object]]]:
+    """Resolve buckets without sizes and cells without labels from bound geometry."""
+    print("UNRESOLVED BOUNDS MERGE: starting no-size and no-label analysis")
+
+    def bucket_record(element: str) -> dict[str, object] | None:
+        bounds = [bound for bound in all_labeled_bounds if bound.get("element") == element]
+        if not bounds or element not in unique_elements:
+            return None
+        values = unique_elements[element]
+        return {
+            "element": element,
+            "count": int(values.get("count", 0)),
+            "width_px": float(np.mean([int(bound["width"]) for bound in bounds])),
+            "height_px": float(np.mean([int(bound["height"]) for bound in bounds])),
+            "has_size": bool(values.get("horizontal_dimensions") and values.get("vertical_dimensions")),
+        }
+
+    records = [record for element in unique_elements if (record := bucket_record(element)) is not None]
+    reliable = sorted(
+        [record for record in records if record["has_size"]],
+        key=lambda item: (-int(item["count"]), str(item["element"])),
+    )
+    no_size = sorted(
+        [record for record in records if not record["has_size"]],
+        key=lambda item: (-int(item["count"]), str(item["element"])),
+    )
+    print(
+        "UNRESOLVED BOUNDS MERGE reliable buckets: "
+        + ", ".join(f"{item['element']}={item['count']}" for item in reliable)
+    )
+
+    bucket_merges: list[dict[str, object]] = []
+    for source in no_size:
+        source_element = str(source["element"])
+        if source_element not in unique_elements:
+            continue
+        print(
+            f"UNRESOLVED BOUNDS MERGE no-size bucket: element={source_element}, count={source['count']}, "
+            f"average_bound={source['width_px']:.2f}x{source['height_px']:.2f}px"
+        )
+        target: dict[str, object] | None = None
+        closest_distance = math.inf
+        for candidate in reliable:
+            width_diff = abs(float(source["width_px"]) - float(candidate["width_px"]))
+            height_diff = abs(float(source["height_px"]) - float(candidate["height_px"]))
+            distance = math.hypot(width_diff, height_diff)
+            print(
+                f"UNRESOLVED BOUNDS MERGE compare bucket: source={source_element}, target={candidate['element']}, "
+                f"target_count={candidate['count']}, delta=({width_diff:.2f}px, {height_diff:.2f}px), "
+                f"distance={distance:.2f}px"
+            )
+            if distance < closest_distance:
+                closest_distance = distance
+                target = candidate
+        if target is None:
+            print(f"UNRESOLVED BOUNDS MERGE bucket skipped: {source_element}, no reliable buckets")
+            continue
+        target_element = str(target["element"])
+        source_count = int(unique_elements[source_element]["count"])
+        target_count_before = int(unique_elements[target_element]["count"])
+        unique_elements[target_element]["count"] = target_count_before + source_count
+        del unique_elements[source_element]
+        changed_bounds = 0
+        for collection in (all_labeled_bounds, validated_inner_bounds, size_source_bounds):
+            for bound in collection:
+                if bound.get("element") == source_element:
+                    bound.setdefault("original_element", source_element)
+                    bound["element"] = target_element
+                    if collection is all_labeled_bounds:
+                        changed_bounds += 1
+        merge = {
+            "from_bucket": source_element,
+            "to_bucket": target_element,
+            "source_count": source_count,
+            "target_count_before_merge": target_count_before,
+            "target_count_after_merge": target_count_before + source_count,
+            "changed_bounds": changed_bounds,
+            "source_average_bound_px": [round(float(source["width_px"]), 2), round(float(source["height_px"]), 2)],
+            "target_average_bound_px": [round(float(target["width_px"]), 2), round(float(target["height_px"]), 2)],
+            "width_diff_px": round(abs(float(source["width_px"]) - float(target["width_px"])), 2),
+            "height_diff_px": round(abs(float(source["height_px"]) - float(target["height_px"])), 2),
+            "euclidean_distance_px": round(closest_distance, 2),
+            "selection_reason": "closest reliable bucket by average bound width/height in pixels",
+        }
+        bucket_merges.append(merge)
+        print(
+            f"UNRESOLVED BOUNDS MERGE bucket merged: {source_element} -> {target_element}, "
+            f"distance={closest_distance:.2f}px, count {target_count_before}+{source_count}={target_count_before + source_count}"
+        )
+
+    # Rebuild references after whole-bucket merges because counts and labels changed.
+    references = [record for element in unique_elements if (record := bucket_record(element)) is not None]
+    references.sort(key=lambda item: (-bool(item["has_size"]), -int(item["count"]), str(item["element"])))
+    unlabeled_assignments: list[dict[str, object]] = []
+    for bound in validated_inner_bounds:
+        if bound.get("element"):
+            continue
+        print(
+            f"UNRESOLVED BOUNDS MERGE unlabeled cell: outer_bound={bound.get('outer_bound')}, "
+            f"bbox=({bound['x']},{bound['y']},{bound['width']},{bound['height']})"
+        )
+        target: dict[str, object] | None = None
+        closest_distance = math.inf
+        for candidate in references:
+            width_diff = abs(int(bound["width"]) - float(candidate["width_px"]))
+            height_diff = abs(int(bound["height"]) - float(candidate["height_px"]))
+            distance = math.hypot(width_diff, height_diff)
+            print(
+                f"UNRESOLVED BOUNDS MERGE compare cell: target={candidate['element']}, "
+                f"target_count={candidate['count']}, delta=({width_diff:.2f}px, {height_diff:.2f}px), "
+                f"distance={distance:.2f}px"
+            )
+            if distance < closest_distance:
+                closest_distance = distance
+                target = candidate
+        if target is None or closest_distance > tolerance_px:
+            print("UNRESOLVED BOUNDS MERGE unlabeled skipped: no matching bucket")
+            continue
+        target_element = str(target["element"])
+        target_count_before = int(unique_elements[target_element]["count"])
+        unique_elements[target_element]["count"] = target_count_before + 1
+        bound["element"] = target_element
+        bound["label_source"] = "bounds_size_merge"
+        labeled = dict(bound)
+        all_labeled_bounds.append(labeled)
+        assignment = {
+            "to_bucket": target_element,
+            "bound": {key: bound[key] for key in ("x", "y", "x1", "y1", "width", "height", "outer_bound")},
+            "target_count_before_merge": target_count_before,
+            "target_count_after_merge": target_count_before + 1,
+            "target_median_bound_px": [round(float(target["width_px"]), 2), round(float(target["height_px"]), 2)],
+            "width_diff_px": round(abs(int(bound["width"]) - float(target["width_px"])), 2),
+            "height_diff_px": round(abs(int(bound["height"]) - float(target["height_px"])), 2),
+            "euclidean_distance_px": round(closest_distance, 2),
+        }
+        unlabeled_assignments.append(assignment)
+        print(
+            f"UNRESOLVED BOUNDS MERGE unlabeled assigned: bbox=({bound['x']},{bound['y']}) -> {target_element}, "
+            f"distance={closest_distance:.2f}px, count {target_count_before}+1={target_count_before + 1}"
+        )
+    print(
+        f"UNRESOLVED BOUNDS MERGE: completed, bucket_merges={len(bucket_merges)}, "
+        f"unlabeled_assignments={len(unlabeled_assignments)}"
+    )
+    return {"bucket_merges": bucket_merges, "unlabeled_assignments": unlabeled_assignments}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Color-mask an image using the non-white colors from a hatch sample.")
     parser.add_argument("--sample", default="hatch.png", help="Reference hatch image to learn colors from.")
@@ -967,6 +1459,30 @@ def main() -> int:
         help="Minimum absolute number of learned hatch pixels required inside an inner bound.",
     )
     parser.add_argument("--ocr-language", default="rus+eng", help="Tesseract languages used for element names.")
+    parser.add_argument(
+        "--merge-correction-tolerance-mm",
+        type=float,
+        default=10.0,
+        help="Maximum width/height difference for singleton OCR merge correction.",
+    )
+    parser.add_argument(
+        "--bucket-merge-tolerance-mm",
+        type=float,
+        default=10.0,
+        help="Maximum width/height difference when merging complete buckets by bound size.",
+    )
+    parser.add_argument(
+        "--final-bucket-merge-tolerance-px",
+        type=float,
+        default=3.0,
+        help="Final median-bound width/height tolerance for size-sorted bucket merging.",
+    )
+    parser.add_argument(
+        "--unresolved-bound-merge-tolerance-px",
+        type=float,
+        default=3.0,
+        help="Tolerance for no-size buckets and unlabeled cells matched to known buckets.",
+    )
     parser.add_argument("--max-colors", type=int, default=48, help="Maximum number of learned palette colors.")
     parser.add_argument("--min-saturation", type=int, default=25, help="Minimum sample saturation treated as hatch color.")
     parser.add_argument("--max-value", type=int, default=250, help="Maximum sample value treated as hatch color.")
@@ -1034,6 +1550,34 @@ def main() -> int:
         args.min_cell_hatch_ratio,
         args.min_cell_hatch_pixels,
     )
+    merge_corrections = merge_correction_step(
+        unique_elements,
+        all_labeled_bounds,
+        validated_inner_bounds,
+        args.merge_correction_tolerance_mm,
+    )
+    bucket_merges = merge_buckets_by_bound_size(
+        unique_elements,
+        all_labeled_bounds,
+        validated_inner_bounds,
+        size_source_bounds,
+        args.bucket_merge_tolerance_mm,
+    )
+    final_bucket_merges = final_merge_buckets_by_sorted_bounds(
+        unique_elements,
+        all_labeled_bounds,
+        validated_inner_bounds,
+        size_source_bounds,
+        args.final_bucket_merge_tolerance_px,
+    )
+    unresolved_merges = merge_unresolved_bounds_with_buckets(
+        unique_elements,
+        all_labeled_bounds,
+        validated_inner_bounds,
+        size_source_bounds,
+        args.unresolved_bound_merge_tolerance_px,
+    )
+    add_average_bound_sizes(unique_elements, all_labeled_bounds)
     total_area_m2 = add_area_totals(unique_elements)
     elements_annotated_rgb = draw_labeled_inner_bounds(target_rgb, validated_inner_bounds)
 
@@ -1065,6 +1609,22 @@ def main() -> int:
         "cell_hatch_validation": {
             "min_ratio": args.min_cell_hatch_ratio,
             "min_pixels": args.min_cell_hatch_pixels,
+        },
+        "merge_correction": {
+            "tolerance_mm": args.merge_correction_tolerance_mm,
+            "corrections": merge_corrections,
+        },
+        "buckets_merge": {
+            "tolerance_mm": args.bucket_merge_tolerance_mm,
+            "merges": bucket_merges,
+        },
+        "final_buckets_merge": {
+            "tolerance_px": args.final_bucket_merge_tolerance_px,
+            "merges": final_bucket_merges,
+        },
+        "unresolved_bounds_merge": {
+            "tolerance_px": args.unresolved_bound_merge_tolerance_px,
+            **unresolved_merges,
         },
         "containment_verified": all(
             bound_is_inside(bound, bounds[int(bound["outer_bound"]) - 1])
