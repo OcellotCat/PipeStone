@@ -733,6 +733,44 @@ def recognize_horizontal_dimension(
     return _pick_dimension(outside)
 
 
+def recognize_external_horizontal_dimension(
+    image_rgb: np.ndarray,
+    cell: dict[str, object],
+    outer_bound: dict[str, object],
+    element: str = "",
+    vertical_dimension: str = "",
+) -> str:
+    """Read only external horizontal zones and prefer the cell-scale match."""
+    image_height, image_width = image_rgb.shape[:2]
+    search_height = max(80, int(outer_bound["height"]) * 2 // 3)
+    left = max(0, int(cell["x"]) + int(cell["width"]) // 12)
+    right = min(image_width, int(cell["x1"]) - int(cell["width"]) // 12)
+    zones = [
+        image_rgb[int(outer_bound["y1"]) : min(image_height, int(outer_bound["y1"]) + search_height), left:right],
+        image_rgb[max(0, int(outer_bound["y"]) - search_height) : int(outer_bound["y"]), left:right],
+        image_rgb[
+            int(cell["y"]) : int(cell["y1"]),
+            max(0, int(outer_bound["x"]) - max(60, int(outer_bound["width"]) // 3)) : int(outer_bound["x"]),
+        ],
+        image_rgb[
+            int(cell["y"]) : int(cell["y1"]),
+            int(outer_bound["x1"]) : min(image_width, int(outer_bound["x1"]) + max(60, int(outer_bound["width"]) // 3)),
+        ],
+    ]
+    candidates: list[str] = []
+    for zone in zones:
+        candidates.extend(_read_dimension_candidates(zone, rotate=False))
+    element_number = re.sub(r"\D", "", element.rsplit("-", 1)[-1]) if element else ""
+    if element_number:
+        candidates = [value for value in candidates if re.sub(r"\D", "", value) != element_number]
+    if not candidates:
+        return ""
+    if vertical_dimension and re.fullmatch(r"\d+", vertical_dimension):
+        expected = float(vertical_dimension) * int(cell["width"]) / max(1, int(cell["height"]))
+        return min(candidates, key=lambda value: abs(float(value) - expected))
+    return _pick_dimension(candidates)
+
+
 def dimensions_match_cell(horizontal: str, vertical: str, cell: dict[str, int], tolerance: float = 0.20) -> bool:
     """Reject façade-wide dimensions by comparing X/Y drawing scales."""
     if not re.fullmatch(r"\d+", horizontal) or not re.fullmatch(r"\d+", vertical):
@@ -885,13 +923,187 @@ def analyze_labeled_inner_bounds(
     return size_source_bounds, all_labeled_bounds, validated_inner_bounds, serialized
 
 
+def analyze_euclidean_bound_buckets(
+    image_rgb: np.ndarray,
+    hatch_mask: np.ndarray,
+    outer_bounds: list[dict[str, object]],
+    ocr_language: str,
+    min_cell_width: int,
+    min_cell_height: int,
+    min_cell_hatch_ratio: float,
+    min_cell_hatch_pixels: int,
+    bucket_tolerance_px: float,
+) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]], dict[str, dict[str, object]], list[dict[str, object]]]:
+    """Default pipeline: cluster validated bounds geometrically, then OCR each bucket."""
+    print("EUCLIDEAN BUCKETING: collecting hatch-validated inner bounds")
+    validated: list[dict[str, object]] = []
+    for outer_index, outer_bound in enumerate(outer_bounds, start=1):
+        for cell in find_inner_grid_bounds(image_rgb, outer_bound, min_cell_width, min_cell_height):
+            if not bound_is_inside(cell, outer_bound):
+                continue
+            hatch_ok, hatch_pixels, hatch_ratio = validate_cell_hatch(
+                cell, hatch_mask, min_cell_hatch_ratio, min_cell_hatch_pixels
+            )
+            if not hatch_ok:
+                continue
+            item: dict[str, object] = dict(cell)
+            item.update(
+                {
+                    "outer_bound": outer_index,
+                    "hatch_match_pixels": hatch_pixels,
+                    "hatch_match_ratio": round(hatch_ratio, 5),
+                }
+            )
+            validated.append(item)
+
+    # Deterministic online clustering in (width_px, height_px). Each bound is
+    # assigned only to its nearest centroid when the Euclidean distance passes.
+    buckets: list[dict[str, object]] = []
+    for bound in sorted(validated, key=lambda item: (int(item["width"]) * int(item["height"]), int(item["width"]), int(item["height"]))):
+        nearest: dict[str, object] | None = None
+        nearest_distance = math.inf
+        for bucket in buckets:
+            distance = math.hypot(
+                int(bound["width"]) - float(bucket["centroid_width_px"]),
+                int(bound["height"]) - float(bucket["centroid_height_px"]),
+            )
+            existing_bounds = bucket["bounds"]
+            assert isinstance(existing_bounds, list)
+            max_member_distance = max(
+                (
+                    math.hypot(
+                        int(bound["width"]) - int(existing["width"]),
+                        int(bound["height"]) - int(existing["height"]),
+                    )
+                    for existing in existing_bounds
+                ),
+                default=0.0,
+            )
+            # Complete-link validation prevents gradual chaining of different
+            # cell sizes through intermediate bounds near the centroid.
+            if distance <= bucket_tolerance_px and max_member_distance <= bucket_tolerance_px and distance < nearest_distance:
+                nearest_distance = distance
+                nearest = bucket
+        if nearest is None or nearest_distance > bucket_tolerance_px:
+            nearest = {
+                "bucket_id": len(buckets) + 1,
+                "centroid_width_px": float(bound["width"]),
+                "centroid_height_px": float(bound["height"]),
+                "bounds": [],
+            }
+            buckets.append(nearest)
+            nearest_distance = 0.0
+        bucket_bounds = nearest["bounds"]
+        assert isinstance(bucket_bounds, list)
+        bucket_bounds.append(bound)
+        nearest["centroid_width_px"] = float(np.mean([int(item["width"]) for item in bucket_bounds]))
+        nearest["centroid_height_px"] = float(np.mean([int(item["height"]) for item in bucket_bounds]))
+        bound["bucket_id"] = int(nearest["bucket_id"])
+        bound["bucket_distance_px"] = round(nearest_distance, 3)
+
+    size_sources: list[dict[str, object]] = []
+    all_labeled: list[dict[str, object]] = []
+    unique: dict[str, dict[str, object]] = {}
+    bucket_summary: list[dict[str, object]] = []
+    # Larger geometry buckets claim the plain OCR label first. A later,
+    # geometrically distinct bucket with the same OCR result stays separate.
+    for bucket in sorted(buckets, key=lambda item: (-len(item["bounds"]), int(item["bucket_id"]))):
+        bucket_bounds = bucket["bounds"]
+        assert isinstance(bucket_bounds, list)
+        recognized: list[str] = []
+        for bound in bucket_bounds:
+            crop = image_rgb[int(bound["y"]) : int(bound["y1"]), int(bound["x"]) : int(bound["x1"])]
+            recognized.append(recognize_element_name(crop, ocr_language))
+        votes = Counter(name for name in recognized if name)
+        ocr_element = votes.most_common(1)[0][0] if votes else f"UNLABELED-BUCKET-{bucket['bucket_id']}"
+        element = ocr_element
+        if element in unique:
+            element = f"{ocr_element} [bucket {bucket['bucket_id']}]"
+
+        horizontal_dimension = ""
+        vertical_dimension = ""
+        source_bound: dict[str, object] | None = None
+        # Search every bound in this geometry bucket until one coherent size is found.
+        for bound, raw_name in zip(bucket_bounds, recognized):
+            outer_bound = outer_bounds[int(bound["outer_bound"]) - 1]
+            crop = image_rgb[int(bound["y"]) : int(bound["y1"]), int(bound["x"]) : int(bound["x1"])]
+            vertical = recognize_vertical_dimension(crop, image_rgb, bound, outer_bound, allow_external=False)
+            horizontal = recognize_horizontal_dimension(image_rgb, bound, outer_bound, raw_name or element)
+            if vertical and (not horizontal or not dimensions_match_cell(horizontal, vertical, bound)):
+                horizontal = recognize_external_horizontal_dimension(
+                    image_rgb, bound, outer_bound, raw_name or element, vertical
+                )
+            if vertical and horizontal and dimensions_match_cell(horizontal, vertical, bound):
+                horizontal_dimension, vertical_dimension = horizontal, vertical
+                source_bound = bound
+                break
+        if not vertical_dimension:
+            for bound in bucket_bounds:
+                outer_bound = outer_bounds[int(bound["outer_bound"]) - 1]
+                crop = image_rgb[int(bound["y"]) : int(bound["y1"]), int(bound["x"]) : int(bound["x1"])]
+                vertical = recognize_vertical_dimension(crop, image_rgb, bound, outer_bound, allow_external=True)
+                horizontal = recognize_horizontal_dimension(image_rgb, bound, outer_bound, element)
+                if vertical and (not horizontal or not dimensions_match_cell(horizontal, vertical, bound)):
+                    horizontal = recognize_external_horizontal_dimension(image_rgb, bound, outer_bound, element, vertical)
+                if vertical and horizontal and dimensions_match_cell(horizontal, vertical, bound):
+                    horizontal_dimension, vertical_dimension = horizontal, vertical
+                    source_bound = bound
+                    break
+
+        for bound, raw_name in zip(bucket_bounds, recognized):
+            bound["raw_ocr_element"] = raw_name or None
+            bound["element"] = element
+            bound["label_source"] = "euclidean_bucket_majority"
+            all_labeled.append(dict(bound))
+        if element not in unique:
+            unique[element] = {
+                "count": 0,
+                "horizontal_dimensions": [],
+                "vertical_dimensions": [],
+            }
+        unique[element]["count"] = int(unique[element]["count"]) + len(bucket_bounds)
+        if horizontal_dimension and horizontal_dimension not in unique[element]["horizontal_dimensions"]:
+            unique[element]["horizontal_dimensions"].append(horizontal_dimension)
+        if vertical_dimension and vertical_dimension not in unique[element]["vertical_dimensions"]:
+            unique[element]["vertical_dimensions"].append(vertical_dimension)
+        if source_bound is not None:
+            source = dict(source_bound)
+            source.update(
+                {
+                    "element": element,
+                    "horizontal_dimension": horizontal_dimension,
+                    "vertical_dimension": vertical_dimension,
+                }
+            )
+            size_sources.append(source)
+        bucket_summary.append(
+            {
+                "bucket_id": int(bucket["bucket_id"]),
+                "count": len(bucket_bounds),
+                "centroid_bound_px": {
+                    "width": round(float(bucket["centroid_width_px"]), 2),
+                    "height": round(float(bucket["centroid_height_px"]), 2),
+                },
+                "element": element,
+                "ocr_element": ocr_element,
+                "label_votes": dict(votes),
+                "horizontal_dimension": horizontal_dimension or None,
+                "vertical_dimension": vertical_dimension or None,
+            }
+        )
+        print(
+            f"EUCLIDEAN BUCKETING bucket={bucket['bucket_id']}, count={len(bucket_bounds)}, "
+            f"centroid={bucket['centroid_width_px']:.2f}x{bucket['centroid_height_px']:.2f}px, "
+            f"element={element}, size={horizontal_dimension or '?'}x{vertical_dimension or '?'}"
+        )
+    return size_sources, all_labeled, validated, unique, bucket_summary
+
+
 def draw_labeled_inner_bounds(image_rgb: np.ndarray, labeled_bounds: list[dict[str, object]]) -> np.ndarray:
     annotated = image_rgb.copy()
-    for index, bound in enumerate(labeled_bounds, start=1):
+    for bound in labeled_bounds:
         x, y, x1, y1 = (int(bound[key]) for key in ("x", "y", "x1", "y1"))
         cv2.rectangle(annotated, (x, y), (x1, y1), (220, 0, 220), 3)
-        # OpenCV's built-in font is ASCII-only; full names are stored in JSON.
-        cv2.putText(annotated, str(index), (x + 5, y + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (220, 0, 220), 2, cv2.LINE_AA)
     return annotated
 
 
@@ -1460,6 +1672,18 @@ def main() -> int:
     )
     parser.add_argument("--ocr-language", default="rus+eng", help="Tesseract languages used for element names.")
     parser.add_argument(
+        "--element-bucketing-algorithm",
+        choices=("euclidean", "legacy"),
+        default="euclidean",
+        help="Element grouping branch: geometry-first euclidean (default) or legacy OCR/merge pipeline.",
+    )
+    parser.add_argument(
+        "--euclidean-bucket-tolerance-px",
+        type=float,
+        default=6.0,
+        help="Maximum Euclidean distance in (bound width, bound height) for the default bucket algorithm.",
+    )
+    parser.add_argument(
         "--merge-correction-tolerance-mm",
         type=float,
         default=10.0,
@@ -1540,46 +1764,67 @@ def main() -> int:
     )
     bounds = find_match_bounds(gabor_mask, gabor_response, args.min_bound_area)
     annotated_rgb = draw_bounds(target_rgb, bounds)
-    size_source_bounds, all_labeled_bounds, validated_inner_bounds, unique_elements = analyze_labeled_inner_bounds(
-        target_rgb,
-        mask,
-        bounds,
-        args.ocr_language,
-        args.min_cell_width,
-        args.min_cell_height,
-        args.min_cell_hatch_ratio,
-        args.min_cell_hatch_pixels,
-    )
-    merge_corrections = merge_correction_step(
-        unique_elements,
-        all_labeled_bounds,
-        validated_inner_bounds,
-        args.merge_correction_tolerance_mm,
-    )
-    bucket_merges = merge_buckets_by_bound_size(
-        unique_elements,
-        all_labeled_bounds,
-        validated_inner_bounds,
-        size_source_bounds,
-        args.bucket_merge_tolerance_mm,
-    )
-    final_bucket_merges = final_merge_buckets_by_sorted_bounds(
-        unique_elements,
-        all_labeled_bounds,
-        validated_inner_bounds,
-        size_source_bounds,
-        args.final_bucket_merge_tolerance_px,
-    )
-    unresolved_merges = merge_unresolved_bounds_with_buckets(
-        unique_elements,
-        all_labeled_bounds,
-        validated_inner_bounds,
-        size_source_bounds,
-        args.unresolved_bound_merge_tolerance_px,
-    )
+    merge_corrections: list[dict[str, object]] = []
+    bucket_merges: list[dict[str, object]] = []
+    final_bucket_merges: list[dict[str, object]] = []
+    unresolved_merges: dict[str, list[dict[str, object]]] = {"bucket_merges": [], "unlabeled_assignments": []}
+    euclidean_buckets: list[dict[str, object]] = []
+    if args.element_bucketing_algorithm == "euclidean":
+        size_source_bounds, all_labeled_bounds, validated_inner_bounds, unique_elements, euclidean_buckets = (
+            analyze_euclidean_bound_buckets(
+                target_rgb,
+                mask,
+                bounds,
+                args.ocr_language,
+                args.min_cell_width,
+                args.min_cell_height,
+                args.min_cell_hatch_ratio,
+                args.min_cell_hatch_pixels,
+                args.euclidean_bucket_tolerance_px,
+            )
+        )
+    else:
+        size_source_bounds, all_labeled_bounds, validated_inner_bounds, unique_elements = analyze_labeled_inner_bounds(
+            target_rgb,
+            mask,
+            bounds,
+            args.ocr_language,
+            args.min_cell_width,
+            args.min_cell_height,
+            args.min_cell_hatch_ratio,
+            args.min_cell_hatch_pixels,
+        )
+        merge_corrections = merge_correction_step(
+            unique_elements, all_labeled_bounds, validated_inner_bounds, args.merge_correction_tolerance_mm
+        )
+        bucket_merges = merge_buckets_by_bound_size(
+            unique_elements, all_labeled_bounds, validated_inner_bounds, size_source_bounds, args.bucket_merge_tolerance_mm
+        )
+        final_bucket_merges = final_merge_buckets_by_sorted_bounds(
+            unique_elements,
+            all_labeled_bounds,
+            validated_inner_bounds,
+            size_source_bounds,
+            args.final_bucket_merge_tolerance_px,
+        )
+        unresolved_merges = merge_unresolved_bounds_with_buckets(
+            unique_elements,
+            all_labeled_bounds,
+            validated_inner_bounds,
+            size_source_bounds,
+            args.unresolved_bound_merge_tolerance_px,
+        )
     add_average_bound_sizes(unique_elements, all_labeled_bounds)
     total_area_m2 = add_area_totals(unique_elements)
     elements_annotated_rgb = draw_labeled_inner_bounds(target_rgb, validated_inner_bounds)
+    unlabeled_bucket_bounds = [
+        {
+            key: bound.get(key)
+            for key in ("element", "bucket_id", "outer_bound", "x", "y", "x1", "y1", "width", "height")
+        }
+        for bound in all_labeled_bounds
+        if str(bound.get("element", "")).startswith("UNLABELED-BUCKET-")
+    ]
 
     hatch_definition_path = Path(args.hatch_definition_output)
     hatch_definition_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1604,6 +1849,12 @@ def main() -> int:
 
     elements_result = {
         "target": str(target_path),
+        "element_bucketing_algorithm": args.element_bucketing_algorithm,
+        "euclidean_bucketing": {
+            "enabled": args.element_bucketing_algorithm == "euclidean",
+            "tolerance_px": args.euclidean_bucket_tolerance_px,
+            "buckets": euclidean_buckets,
+        },
         "labels_restricted_to_hatch_bounds": True,
         "inner_bounds_require_hatch_match": True,
         "cell_hatch_validation": {
@@ -1631,6 +1882,7 @@ def main() -> int:
             for bound in all_labeled_bounds
         ),
         "unique_elements": unique_elements,
+        "unlabeled_bucket_bounds": unlabeled_bucket_bounds,
         "total_area_m2": total_area_m2,
         "validated_inner_bounds": validated_inner_bounds,
         "all_labeled_inner_bounds": all_labeled_bounds,
@@ -1666,6 +1918,15 @@ def main() -> int:
         area = dimensions.get("total_area_m2")
         area_text = f"{area:.3f} m^2" if isinstance(area, (int, float)) else "?"
         print(f"  {element}: count={dimensions['count']}, size={horizontal} x {vertical}, area={area_text}")
+        if element.startswith("UNLABELED-BUCKET-"):
+            element_bounds = [bound for bound in unlabeled_bucket_bounds if bound.get("element") == element]
+            for bound in element_bounds:
+                print(
+                    "    UNLABELED BOUND: "
+                    f"outer_bound={bound.get('outer_bound')}, bucket_id={bound.get('bucket_id')}, "
+                    f"bbox=({bound.get('x')}, {bound.get('y')}, {bound.get('x1')}, {bound.get('y1')}), "
+                    f"size_px={bound.get('width')}x{bound.get('height')}"
+                )
     print(f"Total area: {total_area_m2:.3f} m^2")
     print(f"Wrote: {output_path}")
     print(f"Wrote hatch definition: {hatch_definition_path}")
