@@ -16,6 +16,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:  # Pillow is declared in requirements; keep CLI usable until installed.
+    Image = ImageDraw = ImageFont = None
+
 
 def read_rgb(path: Path) -> np.ndarray:
     image_bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
@@ -1104,6 +1109,43 @@ def draw_labeled_inner_bounds(image_rgb: np.ndarray, labeled_bounds: list[dict[s
     for bound in labeled_bounds:
         x, y, x1, y1 = (int(bound[key]) for key in ("x", "y", "x1", "y1"))
         cv2.rectangle(annotated, (x, y), (x1, y1), (220, 0, 220), 3)
+    if Image is None or ImageDraw is None or ImageFont is None:
+        print("WARNING: Pillow is unavailable; bucket names were not drawn. Install requirements.txt.")
+        return annotated
+
+    font_paths = (
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    )
+    font_path = next((path for path in font_paths if Path(path).exists()), "")
+    pil_image = Image.fromarray(annotated)
+    drawer = ImageDraw.Draw(pil_image)
+    for bound in labeled_bounds:
+        element = str(bound.get("element") or "")
+        if not element:
+            continue
+        x, y = int(bound["x"]), int(bound["y"])
+        width, height = int(bound["width"]), int(bound["height"])
+        font_size = max(12, min(28, height // 6))
+        font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
+        # Reduce the font only when a long corrected bucket name exceeds cell width.
+        while font_size > 10:
+            text_box = drawer.textbbox((0, 0), element, font=font)
+            if text_box[2] - text_box[0] <= max(20, width - 10):
+                break
+            font_size -= 1
+            font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
+        local_box = drawer.textbbox((0, 0), element, font=font)
+        text_height = local_box[3] - local_box[1]
+        text_x = x + 5
+        text_y = max(y + 3, y + height - text_height - 7)
+        text_box = drawer.textbbox((text_x, text_y), element, font=font)
+        drawer.rectangle(
+            (text_box[0] - 2, text_box[1] - 1, min(x + width - 3, text_box[2] + 2), text_box[3] + 1),
+            fill=(255, 255, 255),
+        )
+        drawer.text((text_x, text_y), element, font=font, fill=(220, 0, 220))
+    annotated = np.asarray(pil_image).copy()
     return annotated
 
 
