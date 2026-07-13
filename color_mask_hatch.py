@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import math
 import re
@@ -346,14 +347,40 @@ def build_gabor_match_mask(
     return response_mask
 
 
-def find_match_bounds(match_mask: np.ndarray, response: np.ndarray, min_area: int) -> list[dict[str, object]]:
+def find_match_bounds(
+    match_mask: np.ndarray,
+    response: np.ndarray,
+    min_area: int,
+    refinement_mask: np.ndarray | None = None,
+    refinement_padding: int = 2,
+    min_axis_pixels: int = 2,
+) -> list[dict[str, object]]:
     contours, _ = cv2.findContours(match_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     bounds: list[dict[str, object]] = []
     for contour in contours:
         area = float(cv2.contourArea(contour))
         if area < min_area:
             continue
-        x, y, width, height = cv2.boundingRect(contour)
+        coarse_x, coarse_y, coarse_width, coarse_height = cv2.boundingRect(contour)
+        x, y, width, height = coarse_x, coarse_y, coarse_width, coarse_height
+        if refinement_mask is not None:
+            support = refinement_mask[
+                coarse_y : coarse_y + coarse_height,
+                coarse_x : coarse_x + coarse_width,
+            ] > 0
+            column_support = np.count_nonzero(support, axis=0)
+            row_support = np.count_nonzero(support, axis=1)
+            active_columns = np.flatnonzero(column_support >= max(1, min_axis_pixels))
+            active_rows = np.flatnonzero(row_support >= max(1, min_axis_pixels))
+            if active_columns.size and active_rows.size:
+                refined_left = max(0, int(active_columns[0]) - refinement_padding)
+                refined_right = min(coarse_width, int(active_columns[-1]) + 1 + refinement_padding)
+                refined_top = max(0, int(active_rows[0]) - refinement_padding)
+                refined_bottom = min(coarse_height, int(active_rows[-1]) + 1 + refinement_padding)
+                x = coarse_x + refined_left
+                y = coarse_y + refined_top
+                width = refined_right - refined_left
+                height = refined_bottom - refined_top
         crop_mask = match_mask[y : y + height, x : x + width] > 0
         crop_response = response[y : y + height, x : x + width]
         mean_response = float(np.mean(crop_response[crop_mask])) if np.any(crop_mask) else 0.0
@@ -367,6 +394,10 @@ def find_match_bounds(match_mask: np.ndarray, response: np.ndarray, min_area: in
                 "height": int(height),
                 "area_px": round(area, 2),
                 "mean_gabor_response": round(mean_response, 2),
+                "coarse_x": int(coarse_x),
+                "coarse_y": int(coarse_y),
+                "coarse_width": int(coarse_width),
+                "coarse_height": int(coarse_height),
             }
         )
 
@@ -938,20 +969,100 @@ def analyze_euclidean_bound_buckets(
     min_cell_hatch_ratio: float,
     min_cell_hatch_pixels: int,
     bucket_tolerance_px: float,
-) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]], dict[str, dict[str, object]], list[dict[str, object]]]:
-    """Default pipeline: cluster validated bounds geometrically, then OCR each bucket."""
-    print("EUCLIDEAN BUCKETING: collecting hatch-validated inner bounds")
+    post_ocr_merge_tolerance_px: float,
+    map_workers: int,
+) -> tuple[
+    list[dict[str, object]], list[dict[str, object]], list[dict[str, object]],
+    dict[str, dict[str, object]], list[dict[str, object]], list[dict[str, object]],
+    list[dict[str, object]], list[dict[str, object]], list[dict[str, object]],
+]:
+    """Crop each outer bound, map local OCR cells, then reduce geometry buckets."""
+    print("MAP-REDUCE BUCKETING: mapping each Gabor bound crop")
     validated: list[dict[str, object]] = []
-    for outer_index, outer_bound in enumerate(outer_bounds, start=1):
-        for cell in find_inner_grid_bounds(image_rgb, outer_bound, min_cell_width, min_cell_height):
-            if not bound_is_inside(cell, outer_bound):
+    mapped_buckets: list[dict[str, object]] = []
+    map_partitions: list[dict[str, object]] = []
+
+    def add_bound_to_nearest_bucket(
+        bound: dict[str, object], candidate_buckets: list[dict[str, object]], id_key: str
+    ) -> tuple[dict[str, object], float]:
+        nearest: dict[str, object] | None = None
+        nearest_distance = math.inf
+        for candidate in candidate_buckets:
+            distance = math.hypot(
+                int(bound["width"]) - float(candidate["centroid_width_px"]),
+                int(bound["height"]) - float(candidate["centroid_height_px"]),
+            )
+            members = candidate["bounds"]
+            assert isinstance(members, list)
+            max_member_distance = max(
+                (math.hypot(int(bound["width"]) - int(item["width"]), int(bound["height"]) - int(item["height"])) for item in members),
+                default=0.0,
+            )
+            if distance <= bucket_tolerance_px and max_member_distance <= bucket_tolerance_px and distance < nearest_distance:
+                nearest, nearest_distance = candidate, distance
+        if nearest is None:
+            nearest = {
+                id_key: len(candidate_buckets) + 1,
+                "centroid_width_px": float(bound["width"]),
+                "centroid_height_px": float(bound["height"]),
+                "bounds": [],
+            }
+            candidate_buckets.append(nearest)
+            nearest_distance = 0.0
+        members = nearest["bounds"]
+        assert isinstance(members, list)
+        members.append(bound)
+        nearest["centroid_width_px"] = float(np.mean([int(item["width"]) for item in members]))
+        nearest["centroid_height_px"] = float(np.mean([int(item["height"]) for item in members]))
+        return nearest, nearest_distance
+
+    def map_outer_bound(
+        outer_index: int,
+        outer_bound: dict[str, object],
+    ) -> tuple[int, list[dict[str, object]], list[dict[str, object]], dict[str, object]]:
+        crop_x, crop_y = int(outer_bound["x"]), int(outer_bound["y"])
+        crop_x1, crop_y1 = int(outer_bound["x1"]), int(outer_bound["y1"])
+        crop_rgb = image_rgb[crop_y:crop_y1, crop_x:crop_x1]
+        crop_mask = hatch_mask[crop_y:crop_y1, crop_x:crop_x1]
+        local_outer: dict[str, object] = {
+            "x": 0, "y": 0, "x1": crop_rgb.shape[1], "y1": crop_rgb.shape[0],
+            "width": crop_rgb.shape[1], "height": crop_rgb.shape[0],
+        }
+        local_validated: list[dict[str, object]] = []
+        for local_cell in find_inner_grid_bounds(crop_rgb, local_outer, min_cell_width, min_cell_height):
+            if not bound_is_inside(local_cell, local_outer):
                 continue
             hatch_ok, hatch_pixels, hatch_ratio = validate_cell_hatch(
-                cell, hatch_mask, min_cell_hatch_ratio, min_cell_hatch_pixels
+                local_cell, crop_mask, min_cell_hatch_ratio, min_cell_hatch_pixels
             )
             if not hatch_ok:
                 continue
-            item: dict[str, object] = dict(cell)
+            item: dict[str, object] = dict(local_cell)
+            local_bound = {
+                key: int(local_cell[key])
+                for key in ("x", "y", "x1", "y1", "width", "height")
+            }
+            global_bound = {
+                "x": int(local_cell["x"]) + crop_x,
+                "y": int(local_cell["y"]) + crop_y,
+                "x1": int(local_cell["x1"]) + crop_x,
+                "y1": int(local_cell["y1"]) + crop_y,
+                "width": int(local_cell["width"]),
+                "height": int(local_cell["height"]),
+            }
+            cell_crop = crop_rgb[
+                int(local_cell["y"]) : int(local_cell["y1"]),
+                int(local_cell["x"]) : int(local_cell["x1"]),
+            ]
+            map_ocr_element = recognize_element_name(cell_crop, ocr_language)
+            item.update(
+                {
+                    **global_bound,
+                    "local_bound": local_bound,
+                    "global_bound": global_bound,
+                    "map_ocr_element": map_ocr_element or None,
+                }
+            )
             item.update(
                 {
                     "outer_bound": outer_index,
@@ -959,52 +1070,275 @@ def analyze_euclidean_bound_buckets(
                     "hatch_match_ratio": round(hatch_ratio, 5),
                 }
             )
-            validated.append(item)
+            local_validated.append(item)
 
-    # Deterministic online clustering in (width_px, height_px). Each bound is
-    # assigned only to its nearest centroid when the Euclidean distance passes.
-    buckets: list[dict[str, object]] = []
-    for bound in sorted(validated, key=lambda item: (int(item["width"]) * int(item["height"]), int(item["width"]), int(item["height"]))):
-        nearest: dict[str, object] | None = None
-        nearest_distance = math.inf
-        for bucket in buckets:
-            distance = math.hypot(
-                int(bound["width"]) - float(bucket["centroid_width_px"]),
-                int(bound["height"]) - float(bucket["centroid_height_px"]),
+        local_buckets: list[dict[str, object]] = []
+        for item in sorted(local_validated, key=lambda value: (int(value["width"]) * int(value["height"]), int(value["width"]), int(value["height"]))):
+            local_bucket, distance = add_bound_to_nearest_bucket(item, local_buckets, "local_bucket_id")
+            item["map_outer_bound"] = outer_index
+            item["map_local_bucket_id"] = int(local_bucket["local_bucket_id"])
+            item["map_bucket_distance_px"] = round(distance, 3)
+        partition_buckets: list[dict[str, object]] = []
+        for local_bucket in local_buckets:
+            local_bucket["outer_bound"] = outer_index
+            partition_buckets.append(
+                {
+                    "local_bucket_id": int(local_bucket["local_bucket_id"]),
+                    "count": len(local_bucket["bounds"]),
+                    "centroid_bound_px": {
+                        "width": round(float(local_bucket["centroid_width_px"]), 2),
+                        "height": round(float(local_bucket["centroid_height_px"]), 2),
+                    },
+                }
             )
-            existing_bounds = bucket["bounds"]
-            assert isinstance(existing_bounds, list)
-            max_member_distance = max(
-                (
-                    math.hypot(
-                        int(bound["width"]) - int(existing["width"]),
-                        int(bound["height"]) - int(existing["height"]),
-                    )
-                    for existing in existing_bounds
-                ),
-                default=0.0,
-            )
-            # Complete-link validation prevents gradual chaining of different
-            # cell sizes through intermediate bounds near the centroid.
-            if distance <= bucket_tolerance_px and max_member_distance <= bucket_tolerance_px and distance < nearest_distance:
-                nearest_distance = distance
-                nearest = bucket
-        if nearest is None or nearest_distance > bucket_tolerance_px:
-            nearest = {
-                "bucket_id": len(buckets) + 1,
-                "centroid_width_px": float(bound["width"]),
-                "centroid_height_px": float(bound["height"]),
-                "bounds": [],
+        partition: dict[str, object] = {
+            "outer_bound": outer_index,
+            "crop": {"x": crop_x, "y": crop_y, "x1": crop_x1, "y1": crop_y1},
+            "validated_inner_bounds": len(local_validated),
+            "inner_bounds": [
+                {
+                    "local_bound": dict(item["local_bound"]),
+                    "global_bound": dict(item["global_bound"]),
+                    "ocr_element": item["map_ocr_element"],
+                    "hatch_match_pixels": int(item["hatch_match_pixels"]),
+                    "hatch_match_ratio": float(item["hatch_match_ratio"]),
+                    "local_bucket_id": int(item["map_local_bucket_id"]),
+                }
+                for item in local_validated
+            ],
+            "local_buckets": partition_buckets,
+        }
+        return outer_index, local_validated, local_buckets, partition
+
+    # Each outer-bound map task owns its crops and mutable bucket lists. Only
+    # completed immutable task results cross the thread boundary. Results are
+    # consumed in outer-bound order so the synchronous reduce is deterministic.
+    effective_map_workers = min(max(1, map_workers), len(outer_bounds)) if outer_bounds else 0
+    completed_maps: dict[
+        int,
+        tuple[list[dict[str, object]], list[dict[str, object]], dict[str, object]],
+    ] = {}
+    if effective_map_workers:
+        print(
+            f"MAP-REDUCE BUCKETING: asynchronously scheduling {len(outer_bounds)} "
+            f"map partitions on {effective_map_workers} workers"
+        )
+        with ThreadPoolExecutor(
+            max_workers=effective_map_workers,
+            thread_name_prefix="hatch-map",
+        ) as executor:
+            futures = {
+                executor.submit(map_outer_bound, outer_index, outer_bound): outer_index
+                for outer_index, outer_bound in enumerate(outer_bounds, start=1)
             }
-            buckets.append(nearest)
-            nearest_distance = 0.0
-        bucket_bounds = nearest["bounds"]
+            for future in as_completed(futures):
+                outer_index, local_validated, local_buckets, partition = future.result()
+                completed_maps[outer_index] = (local_validated, local_buckets, partition)
+                print(
+                    f"MAP completed partition={outer_index}, "
+                    f"inner_bounds={len(local_validated)}, local_buckets={len(local_buckets)}"
+                )
+
+    for outer_index in sorted(completed_maps):
+        local_validated, local_buckets, partition = completed_maps[outer_index]
+        validated.extend(local_validated)
+        mapped_buckets.extend(local_buckets)
+        map_partitions.append(partition)
+
+    print("MAP-REDUCE BUCKETING: all map tasks completed; starting synchronous reduce")
+    buckets: list[dict[str, object]] = []
+    for mapped in sorted(mapped_buckets, key=lambda item: (float(item["centroid_width_px"]) * float(item["centroid_height_px"]))):
+        members = mapped["bounds"]
+        assert isinstance(members, list)
+        for bound in members:
+            reduced_bucket, distance = add_bound_to_nearest_bucket(bound, buckets, "bucket_id")
+            bound["bucket_id"] = int(reduced_bucket["bucket_id"])
+            bound["bucket_distance_px"] = round(distance, 3)
+            sources = reduced_bucket.setdefault("map_sources", set())
+            assert isinstance(sources, set)
+            sources.add((int(bound["map_outer_bound"]), int(bound["map_local_bucket_id"])))
+
+    preliminary_bucket_count = len(buckets)
+    for bucket in buckets:
+        bucket_bounds = bucket["bounds"]
         assert isinstance(bucket_bounds, list)
-        bucket_bounds.append(bound)
-        nearest["centroid_width_px"] = float(np.mean([int(item["width"]) for item in bucket_bounds]))
-        nearest["centroid_height_px"] = float(np.mean([int(item["height"]) for item in bucket_bounds]))
-        bound["bucket_id"] = int(nearest["bucket_id"])
-        bound["bucket_distance_px"] = round(nearest_distance, 3)
+        recognized = [str(bound.get("map_ocr_element") or "") for bound in bucket_bounds]
+        for bound, raw_name in zip(bucket_bounds, recognized):
+            bound["raw_ocr_element"] = raw_name or None
+        votes = Counter(name for name in recognized if name)
+        bucket["label_votes"] = votes
+        bucket["ocr_element"] = (
+            votes.most_common(1)[0][0]
+            if votes
+            else f"UNLABELED-BUCKET-{bucket['bucket_id']}"
+        )
+        bucket["post_merge_centroids"] = [
+            (
+                int(bucket["bucket_id"]),
+                float(bucket["centroid_width_px"]),
+                float(bucket["centroid_height_px"]),
+            )
+        ]
+
+    pre_merge_buckets: list[dict[str, object]] = []
+    for bucket in sorted(buckets, key=lambda item: int(item["bucket_id"])):
+        bucket_bounds = bucket["bounds"]
+        assert isinstance(bucket_bounds, list)
+        summary = {
+            "bucket_id": int(bucket["bucket_id"]),
+            "count": len(bucket_bounds),
+            "centroid_bound_px": {
+                "width": round(float(bucket["centroid_width_px"]), 2),
+                "height": round(float(bucket["centroid_height_px"]), 2),
+            },
+            "majority_label": str(bucket["ocr_element"]),
+            "label_votes": dict(Counter(bucket["label_votes"])),
+            "map_sources": [
+                {"outer_bound": source[0], "local_bucket_id": source[1]}
+                for source in sorted(bucket.get("map_sources", set()))
+            ],
+        }
+        pre_merge_buckets.append(summary)
+        print(
+            f"PRE-MERGE BUCKET bucket={summary['bucket_id']}, count={summary['count']}, "
+            f"centroid={summary['centroid_bound_px']['width']:.2f}x"
+            f"{summary['centroid_bound_px']['height']:.2f}px, "
+            f"majority_label={summary['majority_label']}, votes={summary['label_votes']}"
+        )
+
+    pre_merge_comparisons: list[dict[str, object]] = []
+    for left_index, left in enumerate(buckets):
+        for right in buckets[left_index + 1 :]:
+            width_delta = abs(float(left["centroid_width_px"]) - float(right["centroid_width_px"]))
+            height_delta = abs(float(left["centroid_height_px"]) - float(right["centroid_height_px"]))
+            centroid_distance = math.hypot(width_delta, height_delta)
+            left_label = str(left["ocr_element"])
+            right_label = str(right["ocr_element"])
+            same_label = left_label == right_label
+            labeled = not left_label.startswith("UNLABELED-BUCKET-")
+            within_tolerance = centroid_distance <= post_ocr_merge_tolerance_px
+            comparison = {
+                "bucket_a": int(left["bucket_id"]),
+                "bucket_b": int(right["bucket_id"]),
+                "bucket_a_count": len(left["bounds"]),
+                "bucket_b_count": len(right["bounds"]),
+                "bucket_a_majority_label": left_label,
+                "bucket_b_majority_label": right_label,
+                "width_delta_px": round(width_delta, 3),
+                "height_delta_px": round(height_delta, 3),
+                "centroid_distance_px": round(centroid_distance, 3),
+                "same_majority_label": same_label,
+                "within_tolerance": within_tolerance,
+                "merge_candidate": same_label and labeled and within_tolerance,
+            }
+            pre_merge_comparisons.append(comparison)
+            if same_label:
+                print(
+                    f"PRE-MERGE COMPARE buckets={left['bucket_id']}<->{right['bucket_id']}, "
+                    f"label={left_label}, delta={width_delta:.2f}x{height_delta:.2f}px, "
+                    f"centroid_distance={centroid_distance:.2f}px, "
+                    f"tolerance={post_ocr_merge_tolerance_px:.2f}px, "
+                    f"candidate={comparison['merge_candidate']}"
+                )
+
+    # The first reduce remains deliberately strict (complete-link over every
+    # cell). OCR gives us an additional semantic constraint, so geometrically
+    # split buckets may now be joined by their centroids without comparing the
+    # most extreme individual cell widths/heights again.
+    print("POST-OCR BUCKET MERGE: merging equal majority labels with close centroids")
+    post_ocr_merges: list[dict[str, object]] = []
+    merged_buckets: list[dict[str, object]] = []
+    for source in sorted(buckets, key=lambda item: (-len(item["bounds"]), int(item["bucket_id"]))):
+        source_label = str(source["ocr_element"])
+        candidates: list[tuple[float, dict[str, object]]] = []
+        if not source_label.startswith("UNLABELED-BUCKET-"):
+            for target in merged_buckets:
+                if str(target["ocr_element"]) != source_label:
+                    continue
+                centroid_distance = math.hypot(
+                    float(source["centroid_width_px"]) - float(target["centroid_width_px"]),
+                    float(source["centroid_height_px"]) - float(target["centroid_height_px"]),
+                )
+                target_centroids = target["post_merge_centroids"]
+                assert isinstance(target_centroids, list)
+                max_component_distance = max(
+                    math.hypot(
+                        float(source["centroid_width_px"]) - float(component[1]),
+                        float(source["centroid_height_px"]) - float(component[2]),
+                    )
+                    for component in target_centroids
+                )
+                if (
+                    centroid_distance <= post_ocr_merge_tolerance_px
+                    and max_component_distance <= post_ocr_merge_tolerance_px
+                ):
+                    candidates.append((centroid_distance, target))
+        if not candidates:
+            merged_buckets.append(source)
+            continue
+
+        centroid_distance, target = min(
+            candidates,
+            key=lambda candidate: (candidate[0], int(candidate[1]["bucket_id"])),
+        )
+        source_bounds = source["bounds"]
+        target_bounds = target["bounds"]
+        assert isinstance(source_bounds, list) and isinstance(target_bounds, list)
+        source_count = len(source_bounds)
+        target_count_before = len(target_bounds)
+        source_centroid = {
+            "width": round(float(source["centroid_width_px"]), 2),
+            "height": round(float(source["centroid_height_px"]), 2),
+        }
+        target_centroid_before = {
+            "width": round(float(target["centroid_width_px"]), 2),
+            "height": round(float(target["centroid_height_px"]), 2),
+        }
+        for bound in source_bounds:
+            bound["pre_post_ocr_bucket_id"] = int(source["bucket_id"])
+            bound["bucket_id"] = int(target["bucket_id"])
+            bound["post_ocr_merged"] = True
+        target_bounds.extend(source_bounds)
+        target["centroid_width_px"] = float(np.mean([int(bound["width"]) for bound in target_bounds]))
+        target["centroid_height_px"] = float(np.mean([int(bound["height"]) for bound in target_bounds]))
+        target_votes = target["label_votes"]
+        source_votes = source["label_votes"]
+        assert isinstance(target_votes, Counter) and isinstance(source_votes, Counter)
+        target_votes.update(source_votes)
+        target_sources = target.setdefault("map_sources", set())
+        source_sources = source.get("map_sources", set())
+        assert isinstance(target_sources, set) and isinstance(source_sources, set)
+        target_sources.update(source_sources)
+        target_centroids = target["post_merge_centroids"]
+        source_centroids = source["post_merge_centroids"]
+        assert isinstance(target_centroids, list) and isinstance(source_centroids, list)
+        target_centroids.extend(source_centroids)
+        merge = {
+            "from_bucket": int(source["bucket_id"]),
+            "to_bucket": int(target["bucket_id"]),
+            "majority_label": source_label,
+            "centroid_distance_px": round(centroid_distance, 3),
+            "source_count": source_count,
+            "target_count_before_merge": target_count_before,
+            "target_count_after_merge": len(target_bounds),
+            "source_centroid_bound_px": source_centroid,
+            "target_centroid_before_merge_px": target_centroid_before,
+            "merged_centroid_bound_px": {
+                "width": round(float(target["centroid_width_px"]), 2),
+                "height": round(float(target["centroid_height_px"]), 2),
+            },
+        }
+        post_ocr_merges.append(merge)
+        print(
+            f"POST-OCR BUCKET MERGE merged: bucket {source['bucket_id']} -> {target['bucket_id']}, "
+            f"label={source_label}, distance={centroid_distance:.2f}px, "
+            f"count={target_count_before}+{source_count}={len(target_bounds)}"
+        )
+    buckets = merged_buckets
+    print(
+        f"POST-OCR BUCKET MERGE: completed, preliminary={preliminary_bucket_count}, "
+        f"merged={len(post_ocr_merges)}, final={len(buckets)}"
+    )
 
     size_sources: list[dict[str, object]] = []
     all_labeled: list[dict[str, object]] = []
@@ -1015,12 +1349,9 @@ def analyze_euclidean_bound_buckets(
     for bucket in sorted(buckets, key=lambda item: (-len(item["bounds"]), int(item["bucket_id"]))):
         bucket_bounds = bucket["bounds"]
         assert isinstance(bucket_bounds, list)
-        recognized: list[str] = []
-        for bound in bucket_bounds:
-            crop = image_rgb[int(bound["y"]) : int(bound["y1"]), int(bound["x"]) : int(bound["x1"])]
-            recognized.append(recognize_element_name(crop, ocr_language))
-        votes = Counter(name for name in recognized if name)
-        ocr_element = votes.most_common(1)[0][0] if votes else f"UNLABELED-BUCKET-{bucket['bucket_id']}"
+        recognized = [str(bound.get("raw_ocr_element") or "") for bound in bucket_bounds]
+        votes = Counter(bucket["label_votes"])
+        ocr_element = str(bucket["ocr_element"])
         element = ocr_element
         if element in unique:
             element = f"{ocr_element} [bucket {bucket['bucket_id']}]"
@@ -1094,6 +1425,10 @@ def analyze_euclidean_bound_buckets(
                 "label_votes": dict(votes),
                 "horizontal_dimension": horizontal_dimension or None,
                 "vertical_dimension": vertical_dimension or None,
+                "map_sources": [
+                    {"outer_bound": source[0], "local_bucket_id": source[1]}
+                    for source in sorted(bucket.get("map_sources", set()))
+                ],
             }
         )
         print(
@@ -1101,7 +1436,17 @@ def analyze_euclidean_bound_buckets(
             f"centroid={bucket['centroid_width_px']:.2f}x{bucket['centroid_height_px']:.2f}px, "
             f"element={element}, size={horizontal_dimension or '?'}x{vertical_dimension or '?'}"
         )
-    return size_sources, all_labeled, validated, unique, bucket_summary
+    return (
+        size_sources,
+        all_labeled,
+        validated,
+        unique,
+        bucket_summary,
+        map_partitions,
+        post_ocr_merges,
+        pre_merge_buckets,
+        pre_merge_comparisons,
+    )
 
 
 def draw_labeled_inner_bounds(image_rgb: np.ndarray, labeled_bounds: list[dict[str, object]]) -> np.ndarray:
@@ -1147,6 +1492,169 @@ def draw_labeled_inner_bounds(image_rgb: np.ndarray, labeled_bounds: list[dict[s
         drawer.text((text_x, text_y), element, font=font, fill=(220, 0, 220))
     annotated = np.asarray(pil_image).copy()
     return annotated
+
+
+def formal_merge_buckets_by_size(
+    unique_elements: dict[str, dict[str, object]],
+    all_labeled_bounds: list[dict[str, object]],
+    validated_inner_bounds: list[dict[str, object]],
+    size_source_bounds: list[dict[str, object]],
+    tolerance_mm: float,
+) -> dict[str, object]:
+    """Finally merge buckets by physical size, keeping the largest original bucket name."""
+
+    def single_size(values: dict[str, object]) -> tuple[int, int] | None:
+        horizontal = values.get("horizontal_dimensions", [])
+        vertical = values.get("vertical_dimensions", [])
+        if not isinstance(horizontal, list) or not isinstance(vertical, list):
+            return None
+        if len(horizontal) != 1 or len(vertical) != 1:
+            return None
+        width_text, height_text = str(horizontal[0]), str(vertical[0])
+        if not re.fullmatch(r"\d+", width_text) or not re.fullmatch(r"\d+", height_text):
+            return None
+        return int(width_text), int(height_text)
+
+    original_counts = {
+        element: int(values.get("count", 0))
+        for element, values in unique_elements.items()
+    }
+    initial_buckets: list[dict[str, object]] = []
+    eligible: list[str] = []
+    skipped: list[dict[str, object]] = []
+    for element, values in sorted(unique_elements.items()):
+        size = single_size(values)
+        if size is None:
+            skipped.append(
+                {
+                    "element": element,
+                    "original_count": original_counts[element],
+                    "reason": "requires exactly one integer horizontal and vertical dimension",
+                }
+            )
+            continue
+        eligible.append(element)
+        initial_buckets.append(
+            {
+                "element": element,
+                "original_count": original_counts[element],
+                "size_mm": {"width": size[0], "height": size[1]},
+            }
+        )
+
+    print(
+        f"FORMAL SIZE MERGE: starting, eligible={len(eligible)}, "
+        f"skipped={len(skipped)}, tolerance={tolerance_mm:g} mm"
+    )
+    print(
+        "FORMAL SIZE MERGE buckets sorted by original count: "
+        + ", ".join(
+            f"{element}={original_counts[element]}"
+            for element in sorted(eligible, key=lambda name: (-original_counts[name], name))
+        )
+    )
+
+    canonical: list[str] = []
+    comparisons: list[dict[str, object]] = []
+    merges: list[dict[str, object]] = []
+    for source_element in sorted(eligible, key=lambda name: (-original_counts[name], name)):
+        if source_element not in unique_elements:
+            continue
+        source_size = single_size(unique_elements[source_element])
+        assert source_size is not None
+        candidates: list[tuple[int, float, str, dict[str, object]]] = []
+        for target_element in canonical:
+            if target_element not in unique_elements:
+                continue
+            target_size = single_size(unique_elements[target_element])
+            assert target_size is not None
+            width_delta = abs(source_size[0] - target_size[0])
+            height_delta = abs(source_size[1] - target_size[1])
+            distance = math.hypot(width_delta, height_delta)
+            comparison = {
+                "source_element": source_element,
+                "target_element": target_element,
+                "source_original_count": original_counts[source_element],
+                "target_original_count": original_counts[target_element],
+                "source_size_mm": {"width": source_size[0], "height": source_size[1]},
+                "target_size_mm": {"width": target_size[0], "height": target_size[1]},
+                "width_delta_mm": width_delta,
+                "height_delta_mm": height_delta,
+                "euclidean_distance_mm": round(distance, 3),
+                "within_tolerance": distance <= tolerance_mm,
+            }
+            comparisons.append(comparison)
+            print(
+                f"FORMAL SIZE MERGE compare: source={source_element}, target={target_element}, "
+                f"original_counts={original_counts[source_element]}/{original_counts[target_element]}, "
+                f"delta={width_delta}x{height_delta} mm, distance={distance:.2f} mm, "
+                f"within_tolerance={distance <= tolerance_mm}"
+            )
+            if distance <= tolerance_mm:
+                # Original count has priority over distance when several
+                # canonical buckets fall inside the size tolerance.
+                candidates.append((-original_counts[target_element], distance, target_element, comparison))
+        if not candidates:
+            canonical.append(source_element)
+            continue
+
+        _, distance, target_element, comparison = min(candidates)
+        source_count = int(unique_elements[source_element].get("count", 0))
+        target_count_before = int(unique_elements[target_element].get("count", 0))
+        unique_elements[target_element]["count"] = target_count_before + source_count
+        formal_sources = unique_elements[target_element].setdefault("formal_size_merged_from", [])
+        assert isinstance(formal_sources, list)
+        formal_sources.append(
+            {
+                "element": source_element,
+                "original_count": original_counts[source_element],
+                "size_mm": comparison["source_size_mm"],
+            }
+        )
+        del unique_elements[source_element]
+
+        changed_bounds = 0
+        for collection in (all_labeled_bounds, validated_inner_bounds, size_source_bounds):
+            for bound in collection:
+                if bound.get("element") != source_element:
+                    continue
+                bound["pre_formal_size_merge_element"] = source_element
+                bound["element"] = target_element
+                bound["formal_size_merged"] = True
+                if collection is all_labeled_bounds:
+                    changed_bounds += 1
+        merge = {
+            **comparison,
+            "from_element": source_element,
+            "to_element": target_element,
+            "source_count": source_count,
+            "target_count_before_merge": target_count_before,
+            "target_count_after_merge": target_count_before + source_count,
+            "changed_bounds": changed_bounds,
+            "kept_name_reason": "highest original count before formal size merge",
+        }
+        merges.append(merge)
+        print(
+            f"FORMAL SIZE MERGE merged: {source_element} -> {target_element}, "
+            f"distance={distance:.2f} mm, count={target_count_before}+{source_count}="
+            f"{target_count_before + source_count}"
+        )
+
+    print(
+        f"FORMAL SIZE MERGE: completed, merged={len(merges)}, "
+        f"final_buckets={len(unique_elements)}"
+    )
+    return {
+        "tolerance_mm": tolerance_mm,
+        "selection_rule": "keep the name with the highest count before formal size merge",
+        "initial_bucket_count": len(original_counts),
+        "eligible_bucket_count": len(eligible),
+        "final_bucket_count": len(unique_elements),
+        "initial_buckets": initial_buckets,
+        "skipped_buckets": skipped,
+        "comparisons": comparisons,
+        "merges": merges,
+    }
 
 
 def add_area_totals(unique_elements: dict[str, dict[str, object]]) -> float:
@@ -1698,6 +2206,18 @@ def main() -> int:
     parser.add_argument("--gabor-close-size", type=int, default=31, help="Morphological close size for grouping Gabor matches.")
     parser.add_argument("--gabor-dilate-size", type=int, default=11, help="Morphological dilation size for grouping Gabor matches.")
     parser.add_argument("--min-bound-area", type=int, default=1200, help="Minimum contour area for reported hatch bounds.")
+    parser.add_argument(
+        "--bound-refine-padding",
+        type=int,
+        default=2,
+        help="Padding retained around bounds refined from the undilated hatch support mask.",
+    )
+    parser.add_argument(
+        "--bound-refine-min-axis-pixels",
+        type=int,
+        default=2,
+        help="Minimum support pixels required in an axis row/column during bound refinement.",
+    )
     parser.add_argument("--min-cell-width", type=int, default=80, help="Minimum width of an inner panel bound.")
     parser.add_argument("--min-cell-height", type=int, default=55, help="Minimum height of an inner panel bound.")
     parser.add_argument(
@@ -1724,6 +2244,24 @@ def main() -> int:
         type=float,
         default=6.0,
         help="Maximum Euclidean distance in (bound width, bound height) for the default bucket algorithm.",
+    )
+    parser.add_argument(
+        "--post-ocr-bucket-merge-tolerance-px",
+        type=float,
+        default=6.0,
+        help="Maximum centroid distance for merging geometry buckets with the same majority OCR label.",
+    )
+    parser.add_argument(
+        "--formal-size-merge-tolerance-mm",
+        type=float,
+        default=10.0,
+        help="Final Euclidean size tolerance in millimetres; canonical name keeps the highest original count.",
+    )
+    parser.add_argument(
+        "--map-workers",
+        type=int,
+        default=4,
+        help="Concurrent workers for outer-bound map tasks; use 1 for sequential map execution.",
     )
     parser.add_argument(
         "--merge-correction-tolerance-mm",
@@ -1804,26 +2342,51 @@ def main() -> int:
         args.gabor_close_size,
         args.gabor_dilate_size,
     )
-    bounds = find_match_bounds(gabor_mask, gabor_response, args.min_bound_area)
+    # Refine with the learned color mask itself rather than the thresholded
+    # Gabor response: hatch pixels often reach the true border even where the
+    # local Gabor score is weak.
+    raw_hatch_support = mask.astype(np.uint8) * 255
+    bounds = find_match_bounds(
+        gabor_mask,
+        gabor_response,
+        args.min_bound_area,
+        refinement_mask=raw_hatch_support,
+        refinement_padding=args.bound_refine_padding,
+        min_axis_pixels=args.bound_refine_min_axis_pixels,
+    )
     annotated_rgb = draw_bounds(target_rgb, bounds)
     merge_corrections: list[dict[str, object]] = []
     bucket_merges: list[dict[str, object]] = []
     final_bucket_merges: list[dict[str, object]] = []
     unresolved_merges: dict[str, list[dict[str, object]]] = {"bucket_merges": [], "unlabeled_assignments": []}
     euclidean_buckets: list[dict[str, object]] = []
+    map_partitions: list[dict[str, object]] = []
+    post_ocr_bucket_merges: list[dict[str, object]] = []
+    pre_merge_buckets: list[dict[str, object]] = []
+    pre_merge_bucket_comparisons: list[dict[str, object]] = []
     if args.element_bucketing_algorithm == "euclidean":
-        size_source_bounds, all_labeled_bounds, validated_inner_bounds, unique_elements, euclidean_buckets = (
-            analyze_euclidean_bound_buckets(
-                target_rgb,
-                mask,
-                bounds,
-                args.ocr_language,
-                args.min_cell_width,
-                args.min_cell_height,
-                args.min_cell_hatch_ratio,
-                args.min_cell_hatch_pixels,
-                args.euclidean_bucket_tolerance_px,
-            )
+        (
+            size_source_bounds,
+            all_labeled_bounds,
+            validated_inner_bounds,
+            unique_elements,
+            euclidean_buckets,
+            map_partitions,
+            post_ocr_bucket_merges,
+            pre_merge_buckets,
+            pre_merge_bucket_comparisons,
+        ) = analyze_euclidean_bound_buckets(
+            target_rgb,
+            mask,
+            bounds,
+            args.ocr_language,
+            args.min_cell_width,
+            args.min_cell_height,
+            args.min_cell_hatch_ratio,
+            args.min_cell_hatch_pixels,
+            args.euclidean_bucket_tolerance_px,
+            args.post_ocr_bucket_merge_tolerance_px,
+            args.map_workers,
         )
     else:
         size_source_bounds, all_labeled_bounds, validated_inner_bounds, unique_elements = analyze_labeled_inner_bounds(
@@ -1856,6 +2419,13 @@ def main() -> int:
             size_source_bounds,
             args.unresolved_bound_merge_tolerance_px,
         )
+    formal_size_merge_result = formal_merge_buckets_by_size(
+        unique_elements,
+        all_labeled_bounds,
+        validated_inner_bounds,
+        size_source_bounds,
+        args.formal_size_merge_tolerance_mm,
+    )
     add_average_bound_sizes(unique_elements, all_labeled_bounds)
     total_area_m2 = add_area_totals(unique_elements)
     elements_annotated_rgb = draw_labeled_inner_bounds(target_rgb, validated_inner_bounds)
@@ -1882,6 +2452,8 @@ def main() -> int:
             "close_size": int(args.gabor_close_size),
             "dilate_size": int(args.gabor_dilate_size),
             "min_bound_area": int(args.min_bound_area),
+            "bound_refine_padding": int(args.bound_refine_padding),
+            "bound_refine_min_axis_pixels": int(args.bound_refine_min_axis_pixels),
         },
         "bounds": bounds,
     }
@@ -1896,6 +2468,35 @@ def main() -> int:
             "enabled": args.element_bucketing_algorithm == "euclidean",
             "tolerance_px": args.euclidean_bucket_tolerance_px,
             "buckets": euclidean_buckets,
+            "post_ocr_bucket_merge": {
+                "enabled": args.element_bucketing_algorithm == "euclidean",
+                "tolerance_px": args.post_ocr_bucket_merge_tolerance_px,
+                "preliminary_bucket_count": len(euclidean_buckets) + len(post_ocr_bucket_merges),
+                "final_bucket_count": len(euclidean_buckets),
+                "pre_merge_buckets": pre_merge_buckets,
+                "pre_merge_comparisons": pre_merge_bucket_comparisons,
+                "merges": post_ocr_bucket_merges,
+            },
+            "map_reduce": {
+                "enabled": args.element_bucketing_algorithm == "euclidean",
+                "ocr_per_inner_crop": args.element_bucketing_algorithm == "euclidean",
+                "map_execution": {
+                    "mode": "thread_pool_async",
+                    "requested_workers": max(1, args.map_workers),
+                    "effective_workers": (
+                        min(max(1, args.map_workers), len(bounds))
+                        if args.element_bucketing_algorithm == "euclidean" and bounds
+                        else 0
+                    ),
+                    "reduce_mode": "synchronous_after_all_maps",
+                },
+                "coordinate_systems": {
+                    "local_bound": "relative to the initial outer-bound crop",
+                    "global_bound": "relative to the original target image",
+                },
+                "map_partitions": map_partitions,
+                "reduced_bucket_count": len(euclidean_buckets),
+            },
         },
         "labels_restricted_to_hatch_bounds": True,
         "inner_bounds_require_hatch_match": True,
@@ -1919,6 +2520,7 @@ def main() -> int:
             "tolerance_px": args.unresolved_bound_merge_tolerance_px,
             **unresolved_merges,
         },
+        "formal_size_merge": formal_size_merge_result,
         "containment_verified": all(
             bound_is_inside(bound, bounds[int(bound["outer_bound"]) - 1])
             for bound in all_labeled_bounds
