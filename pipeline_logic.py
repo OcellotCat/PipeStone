@@ -14,7 +14,14 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
-from pipestone_ocr import OcrWord, collect_ocr_words, render_pdf_pages, run_image_ocr, words_to_lines
+from pipestone_ocr import (
+    DEFAULT_TESSERACT_LANGUAGE,
+    OcrWord,
+    collect_ocr_words,
+    render_pdf_pages,
+    run_image_ocr,
+    words_to_lines,
+)
 from pipestone_semantic import STONE_KEYWORD_RE
 
 logger = logging.getLogger("pipestone")
@@ -1043,6 +1050,7 @@ def analyze_image_file(
     output_dir: str | Path = DEFAULT_OUTPUT_DIR,
     ocr_backend: str = "tesseract",
     tesseract_psm: int = 11,
+    tesseract_language: str = DEFAULT_TESSERACT_LANGUAGE,
 ) -> dict[str, Any]:
     image_path = Path(image_path)
     if not image_path.exists():
@@ -1050,7 +1058,13 @@ def analyze_image_file(
 
     run_dir = make_run_dir(output_dir)
     image = load_image_rgb(image_path)
-    words, warning = run_image_ocr(image, 1, ocr_backend, tesseract_psm=tesseract_psm)
+    words, warning = run_image_ocr(
+        image,
+        1,
+        ocr_backend,
+        tesseract_psm=tesseract_psm,
+        tesseract_language=tesseract_language,
+    )
     if warning:
         logger.warning("Image OCR warning: %s", warning)
 
@@ -1077,6 +1091,7 @@ def analyze_pdf_file(
     ocr_backend: str = "tesseract",
     force_ocr: bool = False,
     tesseract_psm: int = 11,
+    tesseract_language: str = DEFAULT_TESSERACT_LANGUAGE,
     save_rendered_pages: bool = False,
 ) -> dict[str, Any]:
     pdf_path = Path(pdf_path)
@@ -1092,6 +1107,7 @@ def analyze_pdf_file(
         backend=ocr_backend,
         force_ocr=force_ocr,
         tesseract_psm=tesseract_psm,
+        tesseract_language=tesseract_language,
     )
 
     if save_rendered_pages:

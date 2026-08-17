@@ -101,7 +101,8 @@ def estimate_hatch_angle(mask: np.ndarray) -> float:
 
     angles: list[float] = []
     weights: list[float] = []
-    for line in lines[:, 0, :]:
+    # OpenCV builds return Hough lines as either (N, 1, 4) or (N, 4).
+    for line in np.asarray(lines).reshape(-1, 4):
         x0, y0, x1, y1 = [int(value) for value in line]
         dx = x1 - x0
         dy = y1 - y0
@@ -277,8 +278,14 @@ def gabor_hatch_response(
     # The extra two-pixel halo is required by the final 5x5 Gaussian blur.
     image_height, image_width = gray.shape
     halo = kernel_size // 2 + 2
-    with tempfile.NamedTemporaryFile(prefix="gabor_response_", suffix=".dat") as backing_file:
-        response_map = np.memmap(backing_file.name, dtype=np.float32, mode="w+", shape=(image_height, image_width))
+    # Windows does not allow numpy to reopen a NamedTemporaryFile while its
+    # original handle is still open. Keep the path, close the handle first,
+    # and explicitly remove the disk-backed array after use.
+    backing_file = tempfile.NamedTemporaryFile(prefix="gabor_response_", suffix=".dat", delete=False)
+    backing_path = Path(backing_file.name)
+    backing_file.close()
+    try:
+        response_map = np.memmap(backing_path, dtype=np.float32, mode="w+", shape=(image_height, image_width))
         response_min = math.inf
         response_max = -math.inf
         for top in range(0, image_height, tile_size):
@@ -321,8 +328,13 @@ def gabor_hatch_response(
                         0,
                         255,
                     ).astype(np.uint8)
+            del values
+        response_map.flush()
+        response_map._mmap.close()
         del response_map
         return normalized
+    finally:
+        backing_path.unlink(missing_ok=True)
 
 
 def build_gabor_match_mask(
@@ -551,13 +563,26 @@ def validate_cell_hatch(
 def _tesseract_text(image: np.ndarray, language: str, psm: int, whitelist: str = "") -> str:
     if shutil.which("tesseract") is None:
         return ""
-    with tempfile.NamedTemporaryFile(suffix=".png") as temporary:
-        cv2.imwrite(temporary.name, image)
-        command = ["tesseract", temporary.name, "stdout", "-l", language, "--psm", str(psm)]
+    temporary = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    temporary_path = Path(temporary.name)
+    temporary.close()
+    try:
+        if not cv2.imwrite(str(temporary_path), image):
+            return ""
+        command = ["tesseract", str(temporary_path), "stdout", "-l", language, "--psm", str(psm)]
         if whitelist:
             command.extend(["-c", f"tessedit_char_whitelist={whitelist}"])
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
-    return " ".join(result.stdout.split())
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        return " ".join(result.stdout.split())
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def _prepare_ocr_crop(crop_rgb: np.ndarray, threshold: int, scale: int = 4) -> np.ndarray:

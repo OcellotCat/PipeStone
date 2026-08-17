@@ -13,6 +13,8 @@ from typing import Any
 
 logger = logging.getLogger("pipestone.ocr")
 
+DEFAULT_TESSERACT_LANGUAGE = "rus+eng"
+
 @dataclass(frozen=True)
 class OcrWord:
     page: int
@@ -129,6 +131,7 @@ def collect_ocr_words(
     backend: str,
     force_ocr: bool,
     tesseract_psm: int = 11,
+    tesseract_language: str = DEFAULT_TESSERACT_LANGUAGE,
 ) -> dict[int, list[OcrWord]]:
     text_words = extract_pdf_text_words(pdf_path, rendered_pages)
     words_by_page: dict[int, list[OcrWord]] = defaultdict(list)
@@ -144,7 +147,13 @@ def collect_ocr_words(
         if pdf_words:
             words_by_page[page["page"]].extend(pdf_words)
 
-        image_words, warning = run_image_ocr(page["image"], page["page"], backend, tesseract_psm=tesseract_psm)
+        image_words, warning = run_image_ocr(
+            page["image"],
+            page["page"],
+            backend,
+            tesseract_psm=tesseract_psm,
+            tesseract_language=tesseract_language,
+        )
         if warning:
             warnings.append(f"page {page['page']}: {warning}")
             logger.warning("Page %s OCR warning: %s", page["page"], warning)
@@ -161,17 +170,31 @@ def collect_ocr_words(
     return dict(words_by_page)
 
 
-def run_image_ocr(image: Any, page_number: int, backend: str, tesseract_psm: int = 11) -> tuple[list[OcrWord], str | None]:
+def run_image_ocr(
+    image: Any,
+    page_number: int,
+    backend: str,
+    tesseract_psm: int = 11,
+    tesseract_language: str = DEFAULT_TESSERACT_LANGUAGE,
+) -> tuple[list[OcrWord], str | None]:
     backend = backend.lower()
     if backend == "none":
         return [], "image OCR disabled"
     if backend in {"auto", "tesseract"}:
-        return run_tesseract_ocr(image, page_number, tesseract_psm=tesseract_psm)
+        return run_tesseract_ocr(
+            image,
+            page_number,
+            tesseract_psm=tesseract_psm,
+            tesseract_language=tesseract_language,
+        )
     return [], f"unknown OCR backend: {backend}"
 
 
 def run_tesseract_ocr(
-    image: Any, page_number: int, tesseract_psm: int = 11
+    image: Any,
+    page_number: int,
+    tesseract_psm: int = 11,
+    tesseract_language: str = DEFAULT_TESSERACT_LANGUAGE,
 ) -> tuple[list[OcrWord], str | None]:
     if not has_module("pytesseract"):
         return [], "pytesseract is not installed"
@@ -182,21 +205,22 @@ def run_tesseract_ocr(
     from PIL import Image
 
     try:
+        requested_languages = {language.strip() for language in tesseract_language.split("+") if language.strip()}
+        installed_languages = set(pytesseract.get_languages(config=""))
+        missing_languages = sorted(requested_languages - installed_languages)
+        if missing_languages:
+            return [], (
+                "tesseract languages are not installed: "
+                f"{', '.join(missing_languages)} (requested: {tesseract_language})"
+            )
+
         pil_image = Image.fromarray(image)
-        try:
-            data = pytesseract.image_to_data(
-                pil_image,
-                lang="rus+eng",
-                config=f"--oem 3 --psm {tesseract_psm}",
-                output_type=pytesseract.Output.DICT,
-            )
-        except Exception:
-            data = pytesseract.image_to_data(
-                pil_image,
-                lang="eng",
-                config=f"--oem 3 --psm {tesseract_psm}",
-                output_type=pytesseract.Output.DICT,
-            )
+        data = pytesseract.image_to_data(
+            pil_image,
+            lang=tesseract_language,
+            config=f"--oem 3 --psm {tesseract_psm}",
+            output_type=pytesseract.Output.DICT,
+        )
     except Exception as exc:
         return [], f"tesseract failed: {exc}"
 
