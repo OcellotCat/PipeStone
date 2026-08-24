@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext, redirect_stdout
+import io
 import json
 import math
 import re
@@ -2197,6 +2199,175 @@ def merge_unresolved_bounds_with_buckets(
         f"unlabeled_assignments={len(unlabeled_assignments)}"
     )
     return {"bucket_merges": bucket_merges, "unlabeled_assignments": unlabeled_assignments}
+
+
+def _as_rgb_image(image: np.ndarray, argument_name: str) -> np.ndarray:
+    """Validate and normalize an image passed to the importable API."""
+    if not isinstance(image, np.ndarray):
+        raise TypeError(f"{argument_name} must be a numpy.ndarray")
+    if image.ndim != 3 or image.shape[2] != 3:
+        raise ValueError(f"{argument_name} must have shape (height, width, 3)")
+    if image.shape[0] == 0 or image.shape[1] == 0:
+        raise ValueError(f"{argument_name} must not be empty")
+    if image.dtype != np.uint8:
+        raise TypeError(f"{argument_name} must have dtype numpy.uint8")
+    return np.ascontiguousarray(image)
+
+
+def process_images(
+    images: list[np.ndarray] | tuple[np.ndarray, ...] | np.ndarray,
+    patch_image: np.ndarray,
+    *,
+    threshold: float = 18.0,
+    gabor_threshold: int = 42,
+    gabor_tile_size: int = 1024,
+    gabor_close_size: int = 31,
+    gabor_dilate_size: int = 11,
+    min_bound_area: int = 1200,
+    bound_refine_padding: int = 2,
+    bound_refine_min_axis_pixels: int = 2,
+    max_colors: int = 48,
+    min_saturation: int = 25,
+    max_value: int = 250,
+    target_min_saturation: int = 12,
+    target_max_value: int = 252,
+    hue_threshold: int = 5,
+    preserve_source_colors: bool = False,
+    calculate_area: bool = False,
+    ocr_language: str = "rus+eng",
+    min_cell_width: int = 80,
+    min_cell_height: int = 55,
+    min_cell_hatch_ratio: float = 0.005,
+    min_cell_hatch_pixels: int = 25,
+    euclidean_bucket_tolerance_px: float = 6.0,
+    post_ocr_bucket_merge_tolerance_px: float = 6.0,
+    formal_size_merge_tolerance_mm: float = 10.0,
+    map_workers: int = 4,
+    verbose: bool = False,
+) -> list[dict[str, object]]:
+    """Process RGB images using one RGB hatch patch.
+
+    This is the in-memory API for callers that import this module. ``images``
+    may be a sequence of ``(H, W, 3)`` uint8 arrays or one stacked
+    ``(N, H, W, 3)`` uint8 array. ``patch_image`` is a single ``(H, W, 3)``
+    uint8 array. Channel order is RGB, matching the rest of this module.
+
+    The returned list preserves input order. Each item contains
+    ``masked_image``, ``color_mask``, ``gabor_response``, ``gabor_mask``,
+    ``bounds``, ``bounds_image``, and the shared ``hatch_definition``. When
+    ``calculate_area`` is true, element OCR/grouping results and
+    ``total_area_m2`` are also returned. No files are read or written, and
+    the input arrays are not modified.
+    """
+    patch_rgb = _as_rgb_image(patch_image, "patch_image")
+    if isinstance(images, np.ndarray):
+        if images.ndim != 4 or images.shape[-1] != 3:
+            raise ValueError("images must have shape (count, height, width, 3)")
+        image_sequence = list(images)
+    else:
+        if not isinstance(images, (list, tuple)):
+            raise TypeError("images must be a list, tuple, or stacked numpy.ndarray")
+        image_sequence = list(images)
+
+    palette_rgb = build_palette(patch_rgb, max_colors, min_saturation, max_value)
+    hatch_definition = build_hatch_definition(patch_rgb, palette_rgb, min_saturation, max_value)
+    results: list[dict[str, object]] = []
+
+    for index, image in enumerate(image_sequence):
+        target_rgb = _as_rgb_image(image, f"images[{index}]")
+        masked_rgb, color_mask = mask_by_palette(
+            target_rgb,
+            palette_rgb,
+            threshold,
+            preserve_source_colors,
+            target_min_saturation,
+            target_max_value,
+            hue_threshold,
+        )
+        gabor_response = gabor_hatch_response(
+            target_rgb,
+            color_mask,
+            hatch_definition,
+            tile_size=gabor_tile_size,
+        )
+        gabor_mask = build_gabor_match_mask(
+            gabor_response,
+            color_mask,
+            gabor_threshold,
+            gabor_close_size,
+            gabor_dilate_size,
+        )
+        bounds = find_match_bounds(
+            gabor_mask,
+            gabor_response,
+            min_bound_area,
+            refinement_mask=color_mask.astype(np.uint8) * 255,
+            refinement_padding=bound_refine_padding,
+            min_axis_pixels=bound_refine_min_axis_pixels,
+        )
+        result: dict[str, object] = {
+            "masked_image": masked_rgb,
+            "color_mask": color_mask,
+            "gabor_response": gabor_response,
+            "gabor_mask": gabor_mask,
+            "bounds": bounds,
+            "bounds_image": draw_bounds(target_rgb, bounds),
+            "hatch_definition": hatch_definition,
+        }
+        if calculate_area:
+            output_context = nullcontext() if verbose else redirect_stdout(io.StringIO())
+            with output_context:
+                (
+                    size_source_bounds,
+                    all_labeled_bounds,
+                    validated_inner_bounds,
+                    unique_elements,
+                    euclidean_buckets,
+                    map_partitions,
+                    post_ocr_bucket_merges,
+                    pre_merge_buckets,
+                    pre_merge_bucket_comparisons,
+                ) = analyze_euclidean_bound_buckets(
+                    target_rgb,
+                    color_mask,
+                    bounds,
+                    ocr_language,
+                    min_cell_width,
+                    min_cell_height,
+                    min_cell_hatch_ratio,
+                    min_cell_hatch_pixels,
+                    euclidean_bucket_tolerance_px,
+                    post_ocr_bucket_merge_tolerance_px,
+                    map_workers,
+                )
+                formal_size_merge = formal_merge_buckets_by_size(
+                    unique_elements,
+                    all_labeled_bounds,
+                    validated_inner_bounds,
+                    size_source_bounds,
+                    formal_size_merge_tolerance_mm,
+                )
+                add_average_bound_sizes(unique_elements, all_labeled_bounds)
+                total_area_m2 = add_area_totals(unique_elements)
+            result.update(
+                {
+                    "total_area_m2": total_area_m2,
+                    "unique_elements": unique_elements,
+                    "validated_inner_bounds": validated_inner_bounds,
+                    "all_labeled_inner_bounds": all_labeled_bounds,
+                    "size_source_bounds": size_source_bounds,
+                    "elements_image": draw_labeled_inner_bounds(target_rgb, validated_inner_bounds),
+                    "euclidean_buckets": euclidean_buckets,
+                    "map_partitions": map_partitions,
+                    "post_ocr_bucket_merges": post_ocr_bucket_merges,
+                    "pre_merge_buckets": pre_merge_buckets,
+                    "pre_merge_bucket_comparisons": pre_merge_bucket_comparisons,
+                    "formal_size_merge": formal_size_merge,
+                }
+            )
+        results.append(result)
+
+    return results
 
 
 def main() -> int:

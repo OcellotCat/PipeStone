@@ -29,6 +29,8 @@ logger = logging.getLogger("pipestone")
 APP_NAME = "PipeStone legend hatch finder"
 DEFAULT_DPI = 400
 DEFAULT_OUTPUT_DIR = "output"
+RUN_LOG_FILENAME = "pipeline.log"
+_RUN_FILE_HANDLER_MARKER = "_pipestone_run_file_handler"
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,33 @@ def setup_logging(verbose: bool = False) -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+
+
+def close_run_file_logging() -> None:
+    """Detach and close the active per-run file handler, if any."""
+    for handler in list(logger.handlers):
+        if getattr(handler, _RUN_FILE_HANDLER_MARKER, False):
+            logger.removeHandler(handler)
+            handler.close()
+
+
+def setup_run_file_logging(run_dir: Path) -> Path:
+    """Write all ``pipestone`` logger messages to the current run folder."""
+    close_run_file_logging()
+    log_path = run_dir / RUN_LOG_FILENAME
+    handler = logging.FileHandler(log_path, encoding="utf-8")
+    setattr(handler, _RUN_FILE_HANDLER_MARKER, True)
+    handler.setLevel(logging.DEBUG)
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
+    logger.addHandler(handler)
+    if logger.level == logging.NOTSET or logger.level > logging.INFO:
+        logger.setLevel(logging.INFO)
+    return log_path
 
 
 def require_module(module_name: str, install_hint: str) -> Any:
@@ -1020,6 +1049,8 @@ def make_run_dir(output_dir: str | Path) -> Path:
     run_id = dt.datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
     run_dir = Path(output_dir) / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
+    log_path = setup_run_file_logging(run_dir)
+    logger.info("Run started: directory=%s log=%s", run_dir, log_path)
     return run_dir
 
 
@@ -1030,6 +1061,21 @@ def analyze_page_image(
     *,
     page: int,
 ) -> tuple[list[MaterialLine], list[LegendPatternMatch]]:
+    material_lines, matches = find_page_legend_matches(image, words, page=page)
+    processed_matches = [
+        save_annotated_pattern_image(image, match, run_dir, page=page)
+        for match in matches
+    ]
+    return material_lines, processed_matches
+
+
+def find_page_legend_matches(
+    image: Any,
+    words: list[OcrWord],
+    *,
+    page: int,
+) -> tuple[list[MaterialLine], list[LegendPatternMatch]]:
+    """Find legend references without running the hatch-recognition stage."""
     material_lines = extract_material_lines({page: words})
     matches: list[LegendPatternMatch] = []
 
@@ -1038,10 +1084,158 @@ def analyze_page_image(
         if match is None:
             logger.info("No legend pattern match for page %s line %r", page, material_line.text)
             continue
-        matches.append(save_annotated_pattern_image(image, match, run_dir, page=page))
+        matches.append(match)
         break
 
     return material_lines, matches
+
+
+def _legend_pattern_crop(image: Any, match: LegendPatternMatch) -> Any | None:
+    """Extract the in-memory hatch sample represented by a legend match."""
+    height, width = image.shape[:2]
+    pattern_box = clip_bbox(match.pattern_bbox, width, height)
+    if pattern_box is None:
+        return None
+    x0, y0, x1, y1 = pattern_box
+    return trim_white_margins(image[y0:y1, x0:x1], padding=0)
+
+
+def find_hatch_pages(
+    rendered_pages: list[dict[str, Any]],
+    legend_matches_by_page: dict[int, list[LegendPatternMatch]],
+    run_dir: Path,
+) -> tuple[list[int], list[dict[str, Any]]]:
+    """Search every rendered page using hatch samples extracted from legends."""
+    page_images = {int(item["page"]): item["image"] for item in rendered_pages}
+    references: list[tuple[LegendPatternMatch, Any]] = []
+    for legend_page, matches in legend_matches_by_page.items():
+        legend_image = page_images[legend_page]
+        for match in matches:
+            pattern_crop = _legend_pattern_crop(legend_image, match)
+            if pattern_crop is not None and pattern_crop.size:
+                references.append((match, pattern_crop))
+
+    legend_tables_by_page = {
+        page: [match.table_bbox for match in matches]
+        for page, matches in legend_matches_by_page.items()
+    }
+    page_results: list[dict[str, Any]] = []
+    found_pages: set[int] = set()
+    search_dir = run_dir / "hatch_search"
+
+    for reference_index, (reference_match, pattern_crop) in enumerate(references, start=1):
+        reference_dir = search_dir / f"legend_{reference_match.page:03d}_{reference_index:02d}"
+        for rendered_page in rendered_pages:
+            page = int(rendered_page["page"])
+            recognition = recognize_hatch_pattern(
+                rendered_page["image"],
+                pattern_crop,
+                reference_match,
+                reference_dir,
+                page=page,
+            )
+            excluded_tables = legend_tables_by_page.get(page, [])
+            matches = [
+                candidate
+                for candidate in recognition.get("matches", [])
+                if not any(
+                    bbox_overlap_ratio(tuple(candidate["bbox"]), table_bbox) > 0.2
+                    for table_bbox in excluded_tables
+                )
+            ]
+            if not matches:
+                continue
+            found_pages.add(page)
+            page_results.append(
+                {
+                    "page": page,
+                    "legend_page": reference_match.page,
+                    "legend_line_text": reference_match.line_text,
+                    "matches": matches,
+                    "matches_image": recognition.get("matches_image", ""),
+                    "correlation_mask_image": recognition.get("correlation_mask_image", ""),
+                    "correlation_regions_image": recognition.get("correlation_regions_image", ""),
+                }
+            )
+
+    return sorted(found_pages), page_results
+
+
+def calculate_hatch_page_areas(
+    rendered_pages: list[dict[str, Any]],
+    target_pages: list[int],
+    pattern_image: str,
+    run_dir: Path,
+    *,
+    ocr_language: str,
+) -> dict[str, Any]:
+    """Run color-mask area analysis for matched PDF pages and one saved patch."""
+    if not target_pages:
+        return {
+            "enabled": True,
+            "pattern_image": pattern_image,
+            "pages": [],
+            "total_area_m2": 0.0,
+            "warning": "No pages with a hatch pattern box were found.",
+        }
+    if not pattern_image:
+        return {
+            "enabled": True,
+            "pattern_image": "",
+            "pages": [],
+            "total_area_m2": 0.0,
+            "warning": "Legend hatch patch was not saved.",
+        }
+
+    from color_mask_hatch import process_images
+
+    cv2 = require_module("cv2", "pip install opencv-python-headless")
+    logger.info("Area calculation started: pages=%s pattern=%s", target_pages, pattern_image)
+    pattern_rgb = load_image_rgb(pattern_image)
+    images_by_page = {int(item["page"]): item["image"] for item in rendered_pages}
+    selected_pages = [page for page in target_pages if page in images_by_page]
+    processed = process_images(
+        [images_by_page[page] for page in selected_pages],
+        pattern_rgb,
+        calculate_area=True,
+        ocr_language=ocr_language,
+    )
+
+    area_dir = run_dir / "area_results"
+    area_dir.mkdir(parents=True, exist_ok=True)
+    page_results: list[dict[str, Any]] = []
+    total_area_m2 = 0.0
+    for page, item in zip(selected_pages, processed):
+        page_area = float(item.get("total_area_m2", 0.0))
+        total_area_m2 += page_area
+        elements_image_path = area_dir / f"page_{page:03d}_elements.png"
+        elements_image = item.get("elements_image")
+        if elements_image is not None:
+            cv2.imwrite(str(elements_image_path), cv2.cvtColor(elements_image, cv2.COLOR_RGB2BGR))
+        page_results.append(
+            {
+                "page": page,
+                "total_area_m2": round(page_area, 3),
+                "unique_elements": item.get("unique_elements", {}),
+                "validated_inner_bounds": item.get("validated_inner_bounds", []),
+                "elements_image": str(elements_image_path) if elements_image is not None else "",
+            }
+        )
+        logger.info(
+            "Area calculated: page=%s area_m2=%.3f elements=%s",
+            page,
+            page_area,
+            len(item.get("unique_elements", {})),
+        )
+
+    logger.info("Area calculation completed: total_area_m2=%.3f", total_area_m2)
+    return {
+        "enabled": True,
+        "pattern_image": pattern_image,
+        "pages": page_results,
+        "total_area_m2": round(total_area_m2, 3),
+        "warning": "",
+    }
 
 
 def analyze_image_file(
@@ -1069,9 +1263,11 @@ def analyze_image_file(
         logger.warning("Image OCR warning: %s", warning)
 
     material_lines, matches = analyze_page_image(image, words, run_dir, page=1)
+    logger.info("Image analysis completed: pattern_matches=%s", len(matches))
     return {
         "image_path": str(image_path),
         "run_dir": str(run_dir),
+        "log_file": str(run_dir / RUN_LOG_FILENAME),
         "ocr_warning": warning,
         "material_lines": [material_line_to_dict(line) for line in material_lines],
         "pattern_matches": [match_to_dict(match) for match in matches],
@@ -1093,6 +1289,7 @@ def analyze_pdf_file(
     tesseract_psm: int = 11,
     tesseract_language: str = DEFAULT_TESSERACT_LANGUAGE,
     save_rendered_pages: bool = False,
+    calculate_area: bool = False,
 ) -> dict[str, Any]:
     pdf_path = Path(pdf_path)
     if not pdf_path.exists():
@@ -1117,27 +1314,89 @@ def analyze_pdf_file(
             page_path = pages_dir / f"page_{rendered_page['page']:03d}.png"
             cv2.imwrite(str(page_path), cv2.cvtColor(rendered_page["image"], cv2.COLOR_RGB2BGR))
 
+    # First pass: locate legend pages only.  Hatch recognition is deliberately
+    # deferred so pages without a detected legend never enter that expensive
+    # stage.
     all_material_lines: list[MaterialLine] = []
-    all_matches: list[LegendPatternMatch] = []
+    legend_matches_by_page: dict[int, list[LegendPatternMatch]] = {}
     for rendered_page in rendered_pages:
         page = int(rendered_page["page"])
-        material_lines, matches = analyze_page_image(
+        material_lines, matches = find_page_legend_matches(
             rendered_page["image"],
             words_by_page.get(page, []),
-            run_dir,
             page=page,
         )
         all_material_lines.extend(material_lines)
-        all_matches.extend(matches)
+        if matches:
+            legend_matches_by_page[page] = matches
 
+    # These are the original, one-based PDF page numbers.  Work only on this
+    # subset during the second (hatch-recognition) pass.
+    legend_pages = sorted(legend_matches_by_page)
+    all_matches: list[LegendPatternMatch] = []
+    for rendered_page in rendered_pages:
+        page = int(rendered_page["page"])
+        if page not in legend_matches_by_page:
+            continue
+        for match in legend_matches_by_page[page]:
+            all_matches.append(
+                save_annotated_pattern_image(
+                    rendered_page["image"],
+                    match,
+                    run_dir,
+                    page=page,
+                )
+            )
+
+    # Use every extracted legend sample as a reference and look for matching
+    # hatch regions on every original PDF page. Matches inside legend tables
+    # themselves are excluded from the resulting page list.
+    hatch_pages, hatch_page_matches = find_hatch_pages(
+        rendered_pages,
+        legend_matches_by_page,
+        run_dir,
+    )
+    pattern_images = [match.pattern_image for match in all_matches if match.pattern_image]
+    hatch_pattern_box_pages = sorted({match.page for match in all_matches if match.pattern_image})
+    area_calculation: dict[str, Any] = {
+        "enabled": False,
+        "pattern_image": "",
+        "pages": [],
+        "total_area_m2": 0.0,
+        "warning": "",
+    }
+    if calculate_area:
+        area_calculation = calculate_hatch_page_areas(
+            rendered_pages,
+            hatch_pattern_box_pages,
+            pattern_images[0] if pattern_images else "",
+            run_dir,
+            ocr_language=tesseract_language,
+        )
+
+    logger.info(
+        "PDF analysis completed: legend_pages=%s hatch_pages=%s area_m2=%.3f",
+        legend_pages,
+        hatch_pages,
+        float(area_calculation["total_area_m2"]),
+    )
     return {
         "pdf_path": str(pdf_path),
         "run_dir": str(run_dir),
+        "log_file": str(run_dir / RUN_LOG_FILENAME),
+        "legend_pages": legend_pages,
+        "hatch_pages": hatch_pages,
+        "hatch_pattern_box_pages": hatch_pattern_box_pages,
+        "hatch_page_matches": hatch_page_matches,
+        "area_calculation": area_calculation,
         "material_lines": [material_line_to_dict(line) for line in all_material_lines],
         "pattern_matches": [match_to_dict(match) for match in all_matches],
         "annotated_images": [match.annotated_image for match in all_matches],
-        "pattern_images": [match.pattern_image for match in all_matches if match.pattern_image],
+        "pattern_images": pattern_images,
         "correlation_mask_images": [match.correlation_mask_image for match in all_matches if match.correlation_mask_image],
         "correlation_regions_images": [match.correlation_regions_image for match in all_matches if match.correlation_regions_image],
         "hatch_matches_images": [match.hatch_matches_image for match in all_matches if match.hatch_matches_image],
+        "hatch_page_matches_images": [
+            item["matches_image"] for item in hatch_page_matches if item["matches_image"]
+        ],
     }

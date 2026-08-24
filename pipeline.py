@@ -19,6 +19,11 @@ if __name__ == "__main__":
     parser.add_argument("--ocr-backend", default="auto")
     parser.add_argument("--ocr-language", default=DEFAULT_TESSERACT_LANGUAGE)
     parser.add_argument("--force-ocr", action="store_true")
+    parser.add_argument(
+        "--calculate-area",
+        action="store_true",
+        help="Calculate facade area on pages containing the legend hatch pattern.",
+    )
     parser.add_argument("--json", action="store_true")
 
     args = parser.parse_args()
@@ -44,6 +49,21 @@ if __name__ == "__main__":
             ocr_backend=args.ocr_backend,
             tesseract_language=args.ocr_language,
             force_ocr=args.force_ocr,
+            calculate_area=args.calculate_area,
         )
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.pdf:
+        if args.calculate_area:
+            print(
+                json.dumps(
+                    {
+                        "hatch_pages": result.get("hatch_pages", []),
+                        "area_calculation": result.get("area_calculation", {}),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+        else:
+            print(json.dumps(result.get("hatch_pages", []), ensure_ascii=False))
