@@ -8,11 +8,12 @@ import importlib.util
 import logging
 import math
 import re
+import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import median
-from typing import Any
+from typing import Any, Callable
 
 from pipestone_ocr import (
     DEFAULT_TESSERACT_LANGUAGE,
@@ -28,9 +29,11 @@ logger = logging.getLogger("pipestone")
 
 APP_NAME = "PipeStone legend hatch finder"
 DEFAULT_DPI = 400
+VALIDATION_DPI = 220
 DEFAULT_OUTPUT_DIR = "output"
 RUN_LOG_FILENAME = "pipeline.log"
 _RUN_FILE_HANDLER_MARKER = "_pipestone_run_file_handler"
+ProgressCallback = Callable[[str, int, str], None]
 
 
 @dataclass(frozen=True)
@@ -98,6 +101,16 @@ def require_module(module_name: str, install_hint: str) -> Any:
     if importlib.util.find_spec(module_name) is None:
         raise RuntimeError(f"Missing module {module_name}. Install it with: {install_hint}")
     return __import__(module_name)
+
+
+def report_progress(
+    callback: ProgressCallback | None,
+    stage: str,
+    percent: int,
+    message: str,
+) -> None:
+    if callback is not None:
+        callback(stage, max(0, min(100, percent)), message)
 
 
 def load_image_rgb(image_path: str | Path) -> Any:
@@ -1054,6 +1067,18 @@ def make_run_dir(output_dir: str | Path) -> Path:
     return run_dir
 
 
+def save_pdf_next_to_log(pdf_path: Path, run_dir: Path) -> str:
+    """Copy the source PDF into the run folder without changing its name."""
+    if not run_dir.is_dir():
+        logger.warning("Run directory does not exist; source PDF was not copied: %s", run_dir)
+        return ""
+    destination = run_dir / pdf_path.name
+    if pdf_path.resolve() != destination.resolve():
+        shutil.copy2(pdf_path, destination)
+    logger.info("Source PDF saved next to run log: %s", destination)
+    return str(destination)
+
+
 def analyze_page_image(
     image: Any,
     words: list[OcrWord],
@@ -1088,6 +1113,74 @@ def find_page_legend_matches(
         break
 
     return material_lines, matches
+
+
+def analyze_pdf_legends(
+    pdf_path: str | Path,
+    *,
+    dpi: int = VALIDATION_DPI,
+    output_dir: str | Path = DEFAULT_OUTPUT_DIR,
+    ocr_backend: str = "tesseract",
+    force_ocr: bool = False,
+    tesseract_psm: int = 11,
+    tesseract_language: str = DEFAULT_TESSERACT_LANGUAGE,
+    progress_callback: ProgressCallback | None = None,
+) -> dict[str, Any]:
+    """Find legend entries in a PDF without hatch search or area calculation."""
+    pdf_path = Path(pdf_path)
+    if not pdf_path.exists():
+        raise FileNotFoundError(f"PDF not found: {pdf_path}")
+
+    run_dir = make_run_dir(output_dir)
+    source_pdf = save_pdf_next_to_log(pdf_path, run_dir)
+    report_progress(progress_callback, "legend", 5, "Подготовка страниц и поиск легенды")
+    rendered_pages = render_pdf_pages(pdf_path, dpi=dpi)
+    words_by_page = collect_ocr_words(
+        pdf_path,
+        rendered_pages,
+        backend=ocr_backend,
+        force_ocr=force_ocr,
+        tesseract_psm=tesseract_psm,
+        tesseract_language=tesseract_language,
+    )
+    report_progress(progress_callback, "legend", 45, "Распознавание текста и таблиц легенды")
+
+    material_lines: list[MaterialLine] = []
+    legend_matches: list[LegendPatternMatch] = []
+    for index, rendered_page in enumerate(rendered_pages, start=1):
+        page = int(rendered_page["page"])
+        page_lines, page_matches = find_page_legend_matches(
+            rendered_page["image"],
+            words_by_page.get(page, []),
+            page=page,
+        )
+        material_lines.extend(page_lines)
+        legend_matches.extend(page_matches)
+        percent = 45 + round(50 * index / max(1, len(rendered_pages)))
+        report_progress(progress_callback, "legend", percent, f"Проверена страница {page}")
+
+    legends = [
+        {
+            "page": match.page,
+            "name": match.line_text,
+            "score": match.score,
+            "table_bbox": list(match.table_bbox),
+            "pattern_bbox": list(match.pattern_bbox),
+        }
+        for match in legend_matches
+    ]
+    logger.info("Legend-only analysis completed: pages=%s legends=%s", len(rendered_pages), len(legends))
+    report_progress(progress_callback, "complete", 100, "Поиск легенды завершён")
+    return {
+        "pdf_path": str(pdf_path),
+        "run_dir": str(run_dir),
+        "log_file": str(run_dir / RUN_LOG_FILENAME),
+        "source_pdf": source_pdf,
+        "page_count": len(rendered_pages),
+        "legend_pages": sorted({item["page"] for item in legends}),
+        "legends": legends,
+        "material_lines": [material_line_to_dict(line) for line in material_lines],
+    }
 
 
 def _legend_pattern_crop(image: Any, match: LegendPatternMatch) -> Any | None:
@@ -1168,6 +1261,7 @@ def calculate_hatch_page_areas(
     run_dir: Path,
     *,
     ocr_language: str,
+    progress_callback: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Run color-mask area analysis for matched PDF pages and one saved patch."""
     if not target_pages:
@@ -1199,6 +1293,14 @@ def calculate_hatch_page_areas(
         pattern_rgb,
         calculate_area=True,
         ocr_language=ocr_language,
+        progress_callback=(
+            lambda percent, message: report_progress(
+                progress_callback,
+                "area",
+                75 + round(percent * 0.20),
+                message,
+            )
+        ),
     )
 
     area_dir = run_dir / "area_results"
@@ -1290,6 +1392,7 @@ def analyze_pdf_file(
     tesseract_language: str = DEFAULT_TESSERACT_LANGUAGE,
     save_rendered_pages: bool = False,
     calculate_area: bool = False,
+    progress_callback: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     pdf_path = Path(pdf_path)
     if not pdf_path.exists():
@@ -1297,6 +1400,8 @@ def analyze_pdf_file(
 
     cv2 = require_module("cv2", "pip install opencv-python-headless")
     run_dir = make_run_dir(output_dir)
+    source_pdf = save_pdf_next_to_log(pdf_path, run_dir)
+    report_progress(progress_callback, "legend", 5, "Подготовка страниц и поиск легенды")
     rendered_pages = render_pdf_pages(pdf_path, dpi=dpi)
     words_by_page = collect_ocr_words(
         pdf_path,
@@ -1306,6 +1411,7 @@ def analyze_pdf_file(
         tesseract_psm=tesseract_psm,
         tesseract_language=tesseract_language,
     )
+    report_progress(progress_callback, "legend", 15, "Распознавание текста и таблиц легенды")
 
     if save_rendered_pages:
         pages_dir = run_dir / "rendered_pages"
@@ -1329,9 +1435,11 @@ def analyze_pdf_file(
         all_material_lines.extend(material_lines)
         if matches:
             legend_matches_by_page[page] = matches
+    report_progress(progress_callback, "legend", 30, "Поиск легенды завершён")
 
     # These are the original, one-based PDF page numbers.  Work only on this
     # subset during the second (hatch-recognition) pass.
+    report_progress(progress_callback, "symbol", 35, "Извлечение условного обозначения")
     legend_pages = sorted(legend_matches_by_page)
     all_matches: list[LegendPatternMatch] = []
     for rendered_page in rendered_pages:
@@ -1347,15 +1455,18 @@ def analyze_pdf_file(
                     page=page,
                 )
             )
+    report_progress(progress_callback, "symbol", 50, "Условное обозначение подготовлено")
 
     # Use every extracted legend sample as a reference and look for matching
     # hatch regions on every original PDF page. Matches inside legend tables
     # themselves are excluded from the resulting page list.
+    report_progress(progress_callback, "pages", 55, "Поиск штриховки на страницах файла")
     hatch_pages, hatch_page_matches = find_hatch_pages(
         rendered_pages,
         legend_matches_by_page,
         run_dir,
     )
+    report_progress(progress_callback, "pages", 70, "Страницы со штриховкой определены")
     pattern_images = [match.pattern_image for match in all_matches if match.pattern_image]
     hatch_pattern_box_pages = sorted({match.page for match in all_matches if match.pattern_image})
     area_calculation: dict[str, Any] = {
@@ -1366,13 +1477,16 @@ def analyze_pdf_file(
         "warning": "",
     }
     if calculate_area:
+        report_progress(progress_callback, "area", 75, "Подсчёт площади найденных материалов")
         area_calculation = calculate_hatch_page_areas(
             rendered_pages,
             hatch_pattern_box_pages,
             pattern_images[0] if pattern_images else "",
             run_dir,
             ocr_language=tesseract_language,
+            progress_callback=progress_callback,
         )
+        report_progress(progress_callback, "area", 95, "Подсчёт площади завершён")
 
     logger.info(
         "PDF analysis completed: legend_pages=%s hatch_pages=%s area_m2=%.3f",
@@ -1380,10 +1494,12 @@ def analyze_pdf_file(
         hatch_pages,
         float(area_calculation["total_area_m2"]),
     )
+    report_progress(progress_callback, "complete", 100, "Расчёт успешно завершён")
     return {
         "pdf_path": str(pdf_path),
         "run_dir": str(run_dir),
         "log_file": str(run_dir / RUN_LOG_FILENAME),
+        "source_pdf": source_pdf,
         "legend_pages": legend_pages,
         "hatch_pages": hatch_pages,
         "hatch_pattern_box_pages": hatch_pattern_box_pages,

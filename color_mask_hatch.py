@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Callable
 
 import cv2
 import numpy as np
@@ -2244,6 +2245,7 @@ def process_images(
     formal_size_merge_tolerance_mm: float = 10.0,
     map_workers: int = 4,
     verbose: bool = False,
+    progress_callback: Callable[[int, str], None] | None = None,
 ) -> list[dict[str, object]]:
     """Process RGB images using one RGB hatch patch.
 
@@ -2272,6 +2274,8 @@ def process_images(
     palette_rgb = build_palette(patch_rgb, max_colors, min_saturation, max_value)
     hatch_definition = build_hatch_definition(patch_rgb, palette_rgb, min_saturation, max_value)
     results: list[dict[str, object]] = []
+    if progress_callback is not None:
+        progress_callback(5, "Образец штриховки подготовлен")
 
     for index, image in enumerate(image_sequence):
         target_rgb = _as_rgb_image(image, f"images[{index}]")
@@ -2284,12 +2288,16 @@ def process_images(
             target_max_value,
             hue_threshold,
         )
+        if progress_callback is not None:
+            progress_callback(20, f"Цветовая маска страницы {index + 1} построена")
         gabor_response = gabor_hatch_response(
             target_rgb,
             color_mask,
             hatch_definition,
             tile_size=gabor_tile_size,
         )
+        if progress_callback is not None:
+            progress_callback(45, f"Штриховка страницы {index + 1} найдена")
         gabor_mask = build_gabor_match_mask(
             gabor_response,
             color_mask,
@@ -2305,6 +2313,8 @@ def process_images(
             refinement_padding=bound_refine_padding,
             min_axis_pixels=bound_refine_min_axis_pixels,
         )
+        if progress_callback is not None:
+            progress_callback(60, f"Границы элементов страницы {index + 1} определены")
         result: dict[str, object] = {
             "masked_image": masked_rgb,
             "color_mask": color_mask,
@@ -2315,6 +2325,8 @@ def process_images(
             "hatch_definition": hatch_definition,
         }
         if calculate_area:
+            if progress_callback is not None:
+                progress_callback(65, f"Распознавание размеров страницы {index + 1}")
             output_context = nullcontext() if verbose else redirect_stdout(io.StringIO())
             with output_context:
                 (
@@ -2349,6 +2361,8 @@ def process_images(
                 )
                 add_average_bound_sizes(unique_elements, all_labeled_bounds)
                 total_area_m2 = add_area_totals(unique_elements)
+            if progress_callback is not None:
+                progress_callback(95, f"Площадь страницы {index + 1} рассчитана")
             result.update(
                 {
                     "total_area_m2": total_area_m2,
@@ -2366,6 +2380,9 @@ def process_images(
                 }
             )
         results.append(result)
+
+    if progress_callback is not None:
+        progress_callback(100, "Обработка изображений завершена")
 
     return results
 

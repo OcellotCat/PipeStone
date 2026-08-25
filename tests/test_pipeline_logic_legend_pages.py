@@ -33,6 +33,20 @@ class AnalyzePdfLegendPagesTests(TestCase):
             self.assertIn("second run message", second_text)
             self.assertNotIn("second run message", first_log.read_text(encoding="utf-8"))
 
+    def test_source_pdf_is_saved_next_to_log_without_renaming(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "Фасад камень.pdf"
+            run_dir = root / "results"
+            source.write_bytes(b"%PDF-1.7\n%%EOF")
+            run_dir.mkdir()
+
+            saved = pipeline_logic.save_pdf_next_to_log(source, run_dir)
+
+            destination = run_dir / source.name
+            self.assertEqual(saved, str(destination))
+            self.assertEqual(destination.read_bytes(), source.read_bytes())
+
     def test_searches_all_pages_and_returns_hatch_and_legend_pages(self) -> None:
         image = np.full((20, 20, 3), 255, dtype=np.uint8)
         rendered_pages = [
@@ -82,6 +96,33 @@ class AnalyzePdfLegendPagesTests(TestCase):
         self.assertEqual(result["hatch_page_matches"][0]["page"], 3)
         self.assertEqual(search.call_count, 3)
         save.assert_called_once_with(rendered_pages[1]["image"], legend_match, Path("run"), page=2)
+
+    def test_legend_only_analysis_does_not_run_hatch_or_area_processing(self) -> None:
+        image = np.full((10, 10, 3), 255, dtype=np.uint8)
+        rendered_pages = [{"page": 1, "image": image}]
+        legend_match = pipeline_logic.LegendPatternMatch(
+            page=1,
+            line_text="Гранит",
+            table_bbox=(0.0, 0.0, 10.0, 10.0),
+            row_bbox=(0.0, 0.0, 10.0, 5.0),
+            pattern_bbox=(0.0, 0.0, 5.0, 5.0),
+            score=0.9,
+            annotated_image="",
+        )
+        with (
+            patch.object(pipeline_logic, "make_run_dir", return_value=Path("run")),
+            patch.object(pipeline_logic, "render_pdf_pages", return_value=rendered_pages) as render_pages,
+            patch.object(pipeline_logic, "collect_ocr_words", return_value={}),
+            patch.object(pipeline_logic, "find_page_legend_matches", return_value=([], [legend_match])),
+            patch.object(pipeline_logic, "find_hatch_pages") as hatch_search,
+            patch.object(pipeline_logic, "calculate_hatch_page_areas") as area_search,
+        ):
+            result = pipeline_logic.analyze_pdf_legends("test.pdf")
+
+        self.assertEqual(result["legends"][0]["name"], "Гранит")
+        render_pages.assert_called_once_with(Path("test.pdf"), dpi=220)
+        hatch_search.assert_not_called()
+        area_search.assert_not_called()
 
     def test_returns_empty_hatch_pages_when_no_legend_was_found(self) -> None:
         rendered_pages = [{"page": 1, "image": np.zeros((5, 5, 3), dtype=np.uint8)}]

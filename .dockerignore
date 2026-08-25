@@ -1,0 +1,13 @@
+.git
+.env
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.vscode
+output
+run
+tests
+*.pdf
+server_config.local.json
+config.local.yaml

@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Загрузка PDF и расчёт площади фасадных материалов" />
+    <title>НЭНСИ — расчёт площади камня</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <aside class="alpha-notice" aria-label="Информация о версии продукта">
+      <div class="alpha-notice-inner">
+        <strong>Альфа-версия</strong>
+        <span>Сервис находится в тестовой эксплуатации. Проверяйте результаты перед использованием в проектной документации.</span>
+      </div>
+    </aside>
+    <main class="shell">
+      <header class="hero">
+        <div class="brand"><img src="/logo.png" alt="НЭНСИ" /></div>
+        <p class="eyebrow">ЦИФРОВОЙ АНАЛИЗ ПРОЕКТНОЙ ДОКУМЕНТАЦИИ</p>
+        <h1>Площадь натурального камня<br /><span>из одного PDF</span></h1>
+        <p class="lead">Загрузите документацию, запустите распознавание штриховки и получите сводную площадь по группам материалов.</p>
+      </header>
+
+      <section class="workspace" aria-label="Расчёт площади">
+        <article class="panel upload-panel">
+          <div class="panel-number">01</div>
+          <div class="panel-heading">
+            <div>
+              <p class="section-label">ИСХОДНЫЙ ДОКУМЕНТ</p>
+              <h2>Загрузка PDF</h2>
+            </div>
+            <span id="uploadBadge" class="badge">Файл не выбран</span>
+          </div>
+
+          <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="Выбрать PDF-файл">
+            <input id="fileInput" type="file" accept="application/pdf,.pdf" hidden />
+            <div class="file-icon" aria-hidden="true">PDF</div>
+            <div>
+              <strong>Перетащите PDF сюда</strong>
+              <p>или выберите файл с компьютера · до 100 МБ</p>
+            </div>
+            <button id="selectButton" class="button button-secondary" type="button">Выбрать PDF</button>
+          </div>
+
+          <div id="uploadError" class="message message-error" role="alert" hidden></div>
+          <div id="uploadProgressBlock" class="progress-block" hidden>
+            <div class="progress-copy"><span id="uploadLabel">Загрузка файла</span><strong id="uploadPercent">0%</strong></div>
+            <div class="progress-track"><div id="uploadBar" class="progress-fill"></div></div>
+          </div>
+          <div id="fileSummary" class="file-summary" hidden>
+            <div><span class="status-dot"></span><strong id="fileName"></strong></div>
+            <span id="fileSize"></span>
+          </div>
+
+          <section id="legendPanel" class="legend-panel" hidden aria-live="polite">
+            <div class="legend-panel-heading">
+              <div><p class="section-label">НАЙДЕННЫЕ ДАННЫЕ</p><h3>Легенды документа</h3></div>
+              <strong id="legendCount" class="legend-count">0</strong>
+            </div>
+            <div id="legendSearchProgress" class="progress-block">
+              <div class="progress-copy"><span id="legendMessage">Поиск легенды</span><strong id="legendPercent">0%</strong></div>
+              <div class="progress-track"><div id="legendBar" class="progress-fill"></div></div>
+              <button id="cancelLegendButton" class="button button-stop" type="button">Остановить поиск</button>
+            </div>
+            <p id="legendDuration" class="operation-duration" hidden>Время поиска легенды: 00:00</p>
+            <div id="legendList" class="legend-list" hidden></div>
+            <div id="noLegends" class="no-legends" hidden>Выбранный файл не содержит сведений о камне</div>
+          </section>
+        </article>
+
+        <article class="panel calculation-panel">
+          <div class="panel-number">02</div>
+          <div class="panel-heading">
+            <div>
+              <p class="section-label">ОБРАБОТКА</p>
+              <h2>Расчёт площади</h2>
+            </div>
+            <div class="calculation-actions">
+              <div id="serverStatus" class="server-status checking" aria-live="polite">
+                <span class="server-status-dot"></span><span id="serverStatusText">Проверка сервера…</span>
+              </div>
+              <button id="calculateButton" class="button button-primary" type="button" disabled>Запустить расчёт площади</button>
+              <button id="cancelCalculationButton" class="button button-stop" type="button" hidden>Остановить расчёт</button>
+            </div>
+          </div>
+
+          <div id="calculationIdle" class="calculation-idle">Сначала загрузите корректный PDF-документ.</div>
+          <div id="calculationProgress" hidden>
+            <div class="progress-copy"><span id="calculationMessage">Подготовка</span><strong id="calculationPercent">0%</strong></div>
+            <div class="progress-track progress-track-large"><div id="calculationBar" class="progress-fill"></div></div>
+            <ol id="stageList" class="stage-list">
+              <li data-stage="legend"><span class="stage-marker"></span><span>Поиск легенды</span></li>
+              <li data-stage="symbol"><span class="stage-marker"></span><span>Поиск условного обозначения</span></li>
+              <li data-stage="pages"><span class="stage-marker"></span><span>Поиск страниц в файле</span></li>
+              <li data-stage="area"><span class="stage-marker"></span><span>Подсчёт площади</span></li>
+            </ol>
+          </div>
+          <p id="calculationDuration" class="operation-duration" hidden>Время расчёта: 00:00</p>
+          <div id="calculationError" class="message message-error" role="alert" hidden></div>
+        </article>
+
+        <section id="results" class="results" hidden aria-live="polite">
+          <div class="success-heading">
+            <span class="success-check" aria-hidden="true">✓</span>
+            <div><p class="section-label">РАСЧЁТ ЗАВЕРШЁН</p><h2>Площадь материалов</h2></div>
+          </div>
+          <p id="resultMeta" class="result-meta"></p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Группа материала</th><th>Количество</th><th>Размер, мм</th><th>Страницы</th><th>Площадь, м²</th></tr></thead>
+              <tbody id="resultsBody"></tbody>
+            </table>
+          </div>
+          <div class="total-row"><span>Общая суммарная площадь</span><strong><span id="totalArea">0.000</span> м²</strong></div>
+          <div id="resultWarning" class="message message-warning" hidden></div>
+        </section>
+      </section>
+    </main>
+    <button id="feedbackToggle" class="feedback-toggle" type="button" aria-controls="feedbackDrawer" aria-expanded="false">
+      Обратная связь
+    </button>
+    <section id="feedbackDrawer" class="feedback-drawer" aria-label="Обратная связь" aria-hidden="true">
+      <form id="feedbackForm" class="feedback-form">
+        <div class="feedback-heading">
+          <label for="feedbackDescription">Опишите проблему</label>
+          <button id="feedbackClose" class="feedback-close" type="button" aria-label="Закрыть форму">×</button>
+        </div>
+        <textarea id="feedbackDescription" name="description" maxlength="512" rows="5" required></textarea>
+        <div class="feedback-actions">
+          <span id="feedbackMessage" class="feedback-message" role="status" aria-live="polite"></span>
+          <button id="feedbackSubmit" class="button button-primary" type="submit">Отправить</button>
+        </div>
+      </form>
+    </section>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

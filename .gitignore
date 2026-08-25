@@ -29,9 +29,11 @@ dist/
 !.env.example
 config.yaml
 config.local.yaml
+server_config.local.json
 
 # Runtime output and generated OCR/CV artifacts
 output/
+run/
 runs/
 uploads/
 tmp/
