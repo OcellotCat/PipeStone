@@ -96,7 +96,7 @@ try {
     Assert-LastCommandSucceeded "Archive extraction"
 
     Write-Host "Removing old project containers..."
-    $restartCommand = 'cd "{0}" && docker compose down --remove-orphans && docker compose up --build -d && docker compose ps'
+    $restartCommand = 'cd "{0}" && sudo docker compose down --remove-orphans && sudo docker compose up --build -d && sudo docker compose ps'
     $restartCommand = $restartCommand -f $RemoteDirectory
     & $sshCommand $Server $restartCommand
     Assert-LastCommandSucceeded "Remote Docker Compose rebuild"
