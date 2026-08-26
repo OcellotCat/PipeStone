@@ -177,6 +177,7 @@ function clearUploadState() {
   renderStages([
     { id: "legend", status: "pending" }, { id: "symbol", status: "pending" },
     { id: "pages", status: "pending" }, { id: "area", status: "pending" },
+    { id: "merge", status: "pending" },
   ]);
   document.querySelector("#resultsBody").replaceChildren();
   document.querySelector("#totalArea").textContent = "0.000";
@@ -418,6 +419,7 @@ async function pollLegendStatus() {
 function renderStages(stages) {
   stages.forEach((stage) => {
     const item = document.querySelector(`[data-stage="${stage.id}"]`);
+    if (!item) return;
     item.classList.remove("running", "completed");
     if (stage.status !== "pending") item.classList.add(stage.status);
   });
@@ -532,6 +534,7 @@ async function startCalculation() {
   renderStages([
     { id: "legend", status: "pending" }, { id: "symbol", status: "pending" },
     { id: "pages", status: "pending" }, { id: "area", status: "pending" },
+    { id: "merge", status: "pending" },
   ]);
   try {
     const response = await fetch(`/api/jobs/${activeJobId}/calculate`, { method: "POST" });

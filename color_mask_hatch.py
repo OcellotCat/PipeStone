@@ -644,6 +644,59 @@ def _pick_dimension(candidates: list[str]) -> str:
     return max(set(candidates), key=lambda value: (candidates.count(value), len(value), value))
 
 
+JOINT_DIMENSION_VALUES = {10}
+
+
+def sum_dimension_chain(candidates: list[str]) -> str:
+    """Sum a chained dimension while always excluding joint dimensions."""
+    values = [
+        int(candidate)
+        for candidate in candidates
+        if re.fullmatch(r"\d{1,5}", candidate)
+    ]
+    segments = [value for value in values if value not in JOINT_DIMENSION_VALUES]
+    if len(segments) < 2:
+        return ""
+    return str(sum(segments))
+
+
+def _read_dimension_sequences(crop_rgb: np.ndarray, rotate: bool, psm: int = 11) -> list[list[str]]:
+    """Read one ordered dimension chain per OCR threshold."""
+    if crop_rgb.size == 0 or min(crop_rgb.shape[:2]) < 5:
+        return []
+    if rotate:
+        crop_rgb = cv2.rotate(crop_rgb, cv2.ROTATE_90_CLOCKWISE)
+    sequences: list[list[str]] = []
+    for threshold in (110, 140, 170):
+        text = _tesseract_text(
+            _prepare_ocr_crop(crop_rgb, threshold, 4),
+            "eng",
+            psm,
+            whitelist="0123456789.,",
+        )
+        sequence = [
+            token
+            for token in re.findall(r"\d{1,5}", text)
+            if int(token) >= 10
+        ]
+        if sequence:
+            sequences.append(sequence)
+    return sequences
+
+
+def _pick_dimension_chain(sequences: list[list[str]]) -> str:
+    """Pick the stable OCR chain and sum it without 10 mm joints."""
+    chains = [
+        tuple(value for value in sequence if int(value) not in JOINT_DIMENSION_VALUES)
+        for sequence in sequences
+    ]
+    chains = [chain for chain in chains if len(chain) >= 2]
+    if not chains:
+        return ""
+    chain = max(set(chains), key=lambda value: (chains.count(value), len(value), value))
+    return sum_dimension_chain(list(chain))
+
+
 def _read_dimension_candidates(crop_rgb: np.ndarray, rotate: bool, psm: int = 11) -> list[str]:
     if crop_rgb.size == 0 or min(crop_rgb.shape[:2]) < 5:
         return []
@@ -692,7 +745,11 @@ def recognize_vertical_dimension(
                 whitelist="0123456789.,",
             )
             normalized = text.strip()
-            if re.fullmatch(r"\d{2,5}", normalized):
+            if (
+                re.fullmatch(r"\d{2,5}", normalized)
+                and int(normalized) >= 100
+                and not normalized.startswith("0")
+            ):
                 candidates.append(normalized)
     inside_dimension = _pick_dimension(candidates)
     if inside_dimension:
@@ -709,7 +766,7 @@ def recognize_vertical_dimension(
     # If no vertical number is inside the cell, inspect dimension zones to the
     # left and right. They may lie outside both the cell and the hatch-bound.
     image_height, image_width = image_rgb.shape[:2]
-    search_width = max(60, int(outer_bound["width"]) // 3)
+    search_width = max(60, int(outer_bound["width"]) * 3 // 2)
     pad_y = max(2, int(cell["height"]) // 12)
     top = max(0, int(cell["y"]) + pad_y)
     bottom = min(image_height, int(cell["y1"]) - pad_y)
@@ -726,8 +783,14 @@ def recognize_vertical_dimension(
         ],
     ]
     external: list[str] = []
+    external_chains: list[str] = []
     for zone in zones:
         external.extend(_read_dimension_candidates(zone, rotate=True))
+        chain = _pick_dimension_chain(_read_dimension_sequences(zone, rotate=True))
+        if chain:
+            external_chains.append(chain)
+    if external_chains:
+        return _pick_dimension(external_chains)
     return _pick_dimension(external)
 
 
@@ -2229,9 +2292,9 @@ def process_images(
     bound_refine_min_axis_pixels: int = 2,
     max_colors: int = 48,
     min_saturation: int = 25,
-    max_value: int = 250,
+    max_value: int = 255,
     target_min_saturation: int = 12,
-    target_max_value: int = 252,
+    target_max_value: int = 255,
     hue_threshold: int = 5,
     preserve_source_colors: bool = False,
     calculate_area: bool = False,
@@ -2502,7 +2565,7 @@ def main() -> int:
     )
     parser.add_argument("--max-colors", type=int, default=48, help="Maximum number of learned palette colors.")
     parser.add_argument("--min-saturation", type=int, default=25, help="Minimum sample saturation treated as hatch color.")
-    parser.add_argument("--max-value", type=int, default=250, help="Maximum sample value treated as hatch color.")
+    parser.add_argument("--max-value", type=int, default=255, help="Maximum sample value treated as hatch color.")
     parser.add_argument(
         "--target-min-saturation",
         type=int,
@@ -2512,7 +2575,7 @@ def main() -> int:
     parser.add_argument(
         "--target-max-value",
         type=int,
-        default=252,
+        default=255,
         help="Maximum target value considered for palette matching.",
     )
     parser.add_argument("--hue-threshold", type=int, default=5, help="Maximum OpenCV HSV hue distance from sample colors.")

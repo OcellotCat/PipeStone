@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import asyncio
+from decimal import Decimal, InvalidOperation
 import json
 import logging
 import mimetypes
@@ -322,6 +323,7 @@ def public_job_state(job: dict[str, Any]) -> dict[str, Any]:
                 "legend_finished_at",
                 "calculation_started_at",
                 "calculation_finished_at",
+                "legend_analysis",
             }
         }
     )
@@ -419,25 +421,49 @@ def update_progress(job_id: str, stage: str, percent: int, message: str) -> None
                 item["status"] = "pending"
 
 
-def material_groups(area_calculation: dict[str, Any]) -> list[dict[str, Any]]:
-    grouped: dict[str, dict[str, Any]] = {}
+def normalize_bucket_name(name: Any) -> str:
+    return " ".join(str(name).replace("ё", "е").replace("Ё", "Е").casefold().split())
+
+
+def normalize_bucket_dimensions(values: Any) -> tuple[str, ...]:
+    normalized: set[str] = set()
+    for value in values or []:
+        text = str(value).strip().replace(",", ".")
+        if not text:
+            continue
+        try:
+            number = Decimal(text)
+            text = format(number.normalize(), "f")
+        except InvalidOperation:
+            text = " ".join(text.casefold().split())
+        normalized.add(text)
+    return tuple(sorted(normalized))
+
+
+def merge_area_buckets(area_calculation: dict[str, Any]) -> dict[str, Any]:
+    grouped: dict[tuple[str, tuple[str, ...], tuple[str, ...]], dict[str, Any]] = {}
     for page_result in area_calculation.get("pages", []):
         page = int(page_result.get("page", 0))
         for name, values in page_result.get("unique_elements", {}).items():
+            horizontal_dimensions = normalize_bucket_dimensions(values.get("horizontal_dimensions", []))
+            vertical_dimensions = normalize_bucket_dimensions(values.get("vertical_dimensions", []))
+            key = (
+                normalize_bucket_name(name),
+                horizontal_dimensions,
+                vertical_dimensions,
+            )
             item = grouped.setdefault(
-                str(name),
+                key,
                 {
                     "name": str(name),
                     "count": 0,
-                    "horizontal_dimensions": set(),
-                    "vertical_dimensions": set(),
+                    "horizontal_dimensions": list(horizontal_dimensions),
+                    "vertical_dimensions": list(vertical_dimensions),
                     "area_m2": 0.0,
                     "pages": set(),
                 },
             )
             item["count"] += int(values.get("count", 0))
-            item["horizontal_dimensions"].update(str(value) for value in values.get("horizontal_dimensions", []))
-            item["vertical_dimensions"].update(str(value) for value in values.get("vertical_dimensions", []))
             area = values.get("total_area_m2")
             if isinstance(area, (int, float)):
                 item["area_m2"] += float(area)
@@ -449,13 +475,30 @@ def material_groups(area_calculation: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "name": item["name"],
                 "count": item["count"],
-                "horizontal_dimensions": sorted(item["horizontal_dimensions"]),
-                "vertical_dimensions": sorted(item["vertical_dimensions"]),
+                "horizontal_dimensions": item["horizontal_dimensions"],
+                "vertical_dimensions": item["vertical_dimensions"],
                 "area_m2": round(item["area_m2"], 3),
                 "pages": sorted(item["pages"]),
             }
         )
-    return sorted(result, key=lambda item: (-item["area_m2"], item["name"]))
+    groups = sorted(
+        result,
+        key=lambda item: (
+            -item["area_m2"],
+            normalize_bucket_name(item["name"]),
+            item["horizontal_dimensions"],
+            item["vertical_dimensions"],
+        ),
+    )
+    return {
+        "groups": groups,
+        "total_area_m2": round(sum(item["area_m2"] for item in groups), 3),
+    }
+
+
+def material_groups(area_calculation: dict[str, Any]) -> list[dict[str, Any]]:
+    """Backward-compatible access to the merged web result groups."""
+    return merge_area_buckets(area_calculation)["groups"]
 
 
 def search_legends_job(job_id: str) -> None:
@@ -502,9 +545,16 @@ def search_legends_job(job_id: str) -> None:
             progress_callback=progress,
         )
         legends = result.get("legends", [])
+        legend_analysis = {
+            "analysis_dpi": result.get("analysis_dpi"),
+            "legend_pages": result.get("legend_pages", []),
+            "material_lines": result.get("material_lines", []),
+            "pattern_matches": result.get("pattern_matches", []),
+        }
         with jobs_lock:
             job = jobs[job_id]
             job["legends"] = legends
+            job["legend_analysis"] = legend_analysis
             job["legend_progress"] = 100
             job["legend_log_file"] = result.get("log_file", "")
             if legends:
@@ -553,10 +603,10 @@ def calculate_job(job_id: str) -> None:
         if active_metric_stage and active_metric_stage != stage:
             STAGE_DURATION.labels(active_metric_stage).observe(now - metric_stage_started_at)
             metric_stage_started_at = now
-        if stage != "complete":
-            active_metric_stage = stage
-        else:
+        if stage == "complete":
             active_metric_stage = None
+            return
+        active_metric_stage = stage
         update_progress(job_id, stage, percent, message)
 
     try:
@@ -564,19 +614,25 @@ def calculate_job(job_id: str) -> None:
         with jobs_lock:
             pdf_path = Path(jobs[job_id]["pdf_path"])
             output_dir = Path(jobs[job_id]["output_dir"])
+            legend_analysis = deepcopy(jobs[job_id].get("legend_analysis"))
         result = analyze_pdf_file(
             pdf_path,
             output_dir=output_dir,
             ocr_backend="auto",
             calculate_area=True,
+            precomputed_legend_analysis=legend_analysis,
             progress_callback=progress_with_metrics,
         )
         area = result.get("area_calculation", {})
+        progress_with_metrics("complete", 100, "")
+        merge_started_at = time.perf_counter()
+        merged_buckets = merge_area_buckets(area)
+        STAGE_DURATION.labels("merge").observe(time.perf_counter() - merge_started_at)
         web_result = {
             "legend_pages": result.get("legend_pages", []),
             "hatch_pages": result.get("hatch_pages", []),
             "hatch_pattern_box_pages": result.get("hatch_pattern_box_pages", []),
-            "groups": material_groups(area),
+            "groups": merged_buckets["groups"],
             "page_areas": [
                 {
                     "page": item.get("page"),
@@ -584,7 +640,7 @@ def calculate_job(job_id: str) -> None:
                 }
                 for item in area.get("pages", [])
             ],
-            "total_area_m2": area.get("total_area_m2", 0.0),
+            "total_area_m2": merged_buckets["total_area_m2"],
             "pattern_image": area.get("pattern_image", ""),
             "run_dir": result.get("run_dir", ""),
             "log_file": result.get("log_file", ""),
@@ -594,6 +650,8 @@ def calculate_job(job_id: str) -> None:
             jobs[job_id]["status"] = "completed"
             jobs[job_id]["progress"] = 100
             jobs[job_id]["message"] = "Расчёт успешно завершён"
+            for stage in jobs[job_id]["stages"]:
+                stage["status"] = "completed"
             jobs[job_id]["result"] = web_result
             notification_filename = str(jobs[job_id]["filename"])
             notification_session_id = str(jobs[job_id]["session_id"])
@@ -784,6 +842,7 @@ async def upload_pdf(
             "legend_progress": 0,
             "legend_message": "Поиск легенды поставлен в очередь",
             "legends": [],
+            "legend_analysis": None,
             "legend_log_file": "",
             "legend_started_at": None,
             "legend_finished_at": None,

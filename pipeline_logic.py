@@ -566,7 +566,12 @@ def extract_color_template_64(pattern_rgb: Any) -> Any:
     return canvas
 
 
-def color_correlation_mask(image_rgb: Any, template_rgb: Any) -> dict[str, Any]:
+def color_correlation_mask(
+    image_rgb: Any,
+    template_rgb: Any,
+    *,
+    exclude_bbox: tuple[float, float, float, float] | None = None,
+) -> dict[str, Any]:
     cv2 = require_module("cv2", "pip install opencv-python-headless")
     np = require_module("numpy", "pip install numpy")
 
@@ -575,6 +580,17 @@ def color_correlation_mask(image_rgb: Any, template_rgb: Any) -> dict[str, Any]:
         return {"mask": empty, "regions": empty, "score_map": empty, "threshold": 1.0, "max_score": 0.0}
 
     result = cv2.matchTemplate(image_rgb, template_rgb, cv2.TM_CCOEFF_NORMED)
+    if exclude_bbox is not None:
+        template_height, template_width = template_rgb.shape[:2]
+        result_height, result_width = result.shape[:2]
+        x0, y0, x1, y1 = exclude_bbox
+        left = max(0, int(math.floor(x0)) - template_width + 1)
+        top = max(0, int(math.floor(y0)) - template_height + 1)
+        right = min(result_width, int(math.ceil(x1)))
+        bottom = min(result_height, int(math.ceil(y1)))
+        if right > left and bottom > top:
+            result = result.copy()
+            result[top:bottom, left:right] = -1.0
     _, max_score, _, _ = cv2.minMaxLoc(result)
     threshold = max(0.18, min(0.5, float(max_score) * 0.55))
     points = (result >= threshold).astype(np.uint8)
@@ -912,7 +928,11 @@ def recognize_hatch_pattern(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     template_64 = extract_color_template_64(pattern_crop)
-    correlation = color_correlation_mask(image, template_64)
+    correlation = color_correlation_mask(
+        image,
+        template_64,
+        exclude_bbox=match.table_bbox if page == match.page else None,
+    )
 
     correlation_mask_path = output_dir / f"page_{page:03d}_correlation_mask_64.png"
     cv2.imwrite(str(correlation_mask_path), correlation["mask"])
@@ -1177,10 +1197,44 @@ def analyze_pdf_legends(
         "log_file": str(run_dir / RUN_LOG_FILENAME),
         "source_pdf": source_pdf,
         "page_count": len(rendered_pages),
+        "analysis_dpi": dpi,
         "legend_pages": sorted({item["page"] for item in legends}),
         "legends": legends,
         "material_lines": [material_line_to_dict(line) for line in material_lines],
+        "pattern_matches": [match_to_dict(match) for match in legend_matches],
     }
+
+
+def material_line_from_dict(item: dict[str, Any], *, scale: float = 1.0) -> MaterialLine:
+    bbox = tuple(float(value) * scale for value in item.get("bbox", (0, 0, 0, 0)))
+    if len(bbox) != 4:
+        raise ValueError("Material line bbox must contain four coordinates")
+    confidence = item.get("confidence")
+    return MaterialLine(
+        page=int(item["page"]),
+        text=str(item.get("text", "")),
+        bbox=bbox,
+        confidence=float(confidence) if confidence is not None else None,
+        source=str(item.get("source", "precomputed")),
+    )
+
+
+def legend_match_from_dict(item: dict[str, Any], *, scale: float = 1.0) -> LegendPatternMatch:
+    def scaled_bbox(name: str) -> tuple[float, float, float, float]:
+        bbox = tuple(float(value) * scale for value in item.get(name, (0, 0, 0, 0)))
+        if len(bbox) != 4:
+            raise ValueError(f"Legend {name} must contain four coordinates")
+        return bbox
+
+    return LegendPatternMatch(
+        page=int(item["page"]),
+        line_text=str(item.get("line_text", item.get("name", ""))),
+        table_bbox=scaled_bbox("table_bbox"),
+        row_bbox=scaled_bbox("row_bbox"),
+        pattern_bbox=scaled_bbox("pattern_bbox"),
+        score=float(item.get("score", 0.0)),
+        annotated_image="",
+    )
 
 
 def _legend_pattern_crop(image: Any, match: LegendPatternMatch) -> Any | None:
@@ -1392,6 +1446,7 @@ def analyze_pdf_file(
     tesseract_language: str = DEFAULT_TESSERACT_LANGUAGE,
     save_rendered_pages: bool = False,
     calculate_area: bool = False,
+    precomputed_legend_analysis: dict[str, Any] | None = None,
     progress_callback: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     pdf_path = Path(pdf_path)
@@ -1402,16 +1457,57 @@ def analyze_pdf_file(
     run_dir = make_run_dir(output_dir)
     source_pdf = save_pdf_next_to_log(pdf_path, run_dir)
     report_progress(progress_callback, "legend", 5, "Подготовка страниц и поиск легенды")
-    rendered_pages = render_pdf_pages(pdf_path, dpi=dpi)
-    words_by_page = collect_ocr_words(
-        pdf_path,
-        rendered_pages,
-        backend=ocr_backend,
-        force_ocr=force_ocr,
-        tesseract_psm=tesseract_psm,
-        tesseract_language=tesseract_language,
-    )
-    report_progress(progress_callback, "legend", 15, "Распознавание текста и таблиц легенды")
+    all_material_lines: list[MaterialLine] = []
+    legend_matches_by_page: dict[int, list[LegendPatternMatch]] = {}
+
+    if precomputed_legend_analysis is not None:
+        source_dpi = float(precomputed_legend_analysis.get("analysis_dpi", VALIDATION_DPI))
+        if source_dpi <= 0:
+            raise ValueError("Precomputed legend DPI must be positive")
+        scale = float(dpi) / source_dpi
+        all_material_lines = [
+            material_line_from_dict(item, scale=scale)
+            for item in precomputed_legend_analysis.get("material_lines", [])
+        ]
+        for item in precomputed_legend_analysis.get("pattern_matches", []):
+            match = legend_match_from_dict(item, scale=scale)
+            legend_matches_by_page.setdefault(match.page, []).append(match)
+        legend_pages = sorted(legend_matches_by_page)
+        if not legend_pages:
+            raise ValueError("Precomputed legend analysis does not contain pattern matches")
+        rendered_pages = render_pdf_pages(pdf_path, dpi=dpi, page_numbers=legend_pages)
+        logger.info(
+            "Reusing precomputed legend analysis: source_dpi=%s target_dpi=%s pages=%s materials=%s matches=%s",
+            source_dpi,
+            dpi,
+            legend_pages,
+            len(all_material_lines),
+            sum(len(matches) for matches in legend_matches_by_page.values()),
+        )
+        report_progress(progress_callback, "legend", 30, "Ранее найденная легенда загружена")
+    else:
+        rendered_pages = render_pdf_pages(pdf_path, dpi=dpi)
+        words_by_page = collect_ocr_words(
+            pdf_path,
+            rendered_pages,
+            backend=ocr_backend,
+            force_ocr=force_ocr,
+            tesseract_psm=tesseract_psm,
+            tesseract_language=tesseract_language,
+        )
+        report_progress(progress_callback, "legend", 15, "Распознавание текста и таблиц легенды")
+
+        for rendered_page in rendered_pages:
+            page = int(rendered_page["page"])
+            material_lines, matches = find_page_legend_matches(
+                rendered_page["image"],
+                words_by_page.get(page, []),
+                page=page,
+            )
+            all_material_lines.extend(material_lines)
+            if matches:
+                legend_matches_by_page[page] = matches
+        report_progress(progress_callback, "legend", 30, "Поиск легенды завершён")
 
     if save_rendered_pages:
         pages_dir = run_dir / "rendered_pages"
@@ -1419,23 +1515,6 @@ def analyze_pdf_file(
         for rendered_page in rendered_pages:
             page_path = pages_dir / f"page_{rendered_page['page']:03d}.png"
             cv2.imwrite(str(page_path), cv2.cvtColor(rendered_page["image"], cv2.COLOR_RGB2BGR))
-
-    # First pass: locate legend pages only.  Hatch recognition is deliberately
-    # deferred so pages without a detected legend never enter that expensive
-    # stage.
-    all_material_lines: list[MaterialLine] = []
-    legend_matches_by_page: dict[int, list[LegendPatternMatch]] = {}
-    for rendered_page in rendered_pages:
-        page = int(rendered_page["page"])
-        material_lines, matches = find_page_legend_matches(
-            rendered_page["image"],
-            words_by_page.get(page, []),
-            page=page,
-        )
-        all_material_lines.extend(material_lines)
-        if matches:
-            legend_matches_by_page[page] = matches
-    report_progress(progress_callback, "legend", 30, "Поиск легенды завершён")
 
     # These are the original, one-based PDF page numbers.  Work only on this
     # subset during the second (hatch-recognition) pass.
@@ -1458,8 +1537,9 @@ def analyze_pdf_file(
     report_progress(progress_callback, "symbol", 50, "Условное обозначение подготовлено")
 
     # Use every extracted legend sample as a reference and look for matching
-    # hatch regions on every original PDF page. Matches inside legend tables
-    # themselves are excluded from the resulting page list.
+    # hatch regions on the rendered high-resolution subset. With precomputed
+    # analysis this subset contains only pages where a legend was already found.
+    # Matches inside legend tables are excluded from the resulting page list.
     report_progress(progress_callback, "pages", 55, "Поиск штриховки на страницах файла")
     hatch_pages, hatch_page_matches = find_hatch_pages(
         rendered_pages,

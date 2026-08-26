@@ -33,6 +33,25 @@ class AnalyzePdfLegendPagesTests(TestCase):
             self.assertIn("second run message", second_text)
             self.assertNotIn("second run message", first_log.read_text(encoding="utf-8"))
 
+    def test_color_correlation_threshold_ignores_legend_table_self_match(self) -> None:
+        image = np.full((256, 256, 3), 255, dtype=np.uint8)
+        template = np.zeros((64, 64, 3), dtype=np.uint8)
+        template[::2, :, :] = 255
+        score_map = np.zeros((193, 193), dtype=np.float32)
+        score_map[10, 10] = 1.0
+        score_map[120, 120] = 0.3
+
+        with patch("cv2.matchTemplate", return_value=score_map):
+            result = pipeline_logic.color_correlation_mask(
+                image,
+                template,
+                exclude_bbox=(0.0, 0.0, 80.0, 80.0),
+            )
+
+        self.assertEqual(result["max_score"], 0.3)
+        self.assertEqual(result["threshold"], 0.18)
+        self.assertGreater(int(np.count_nonzero(result["regions"][120:184, 120:184])), 0)
+
     def test_source_pdf_is_saved_next_to_log_without_renaming(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -120,9 +139,66 @@ class AnalyzePdfLegendPagesTests(TestCase):
             result = pipeline_logic.analyze_pdf_legends("test.pdf")
 
         self.assertEqual(result["legends"][0]["name"], "Гранит")
+        self.assertEqual(result["analysis_dpi"], 220)
+        self.assertEqual(result["pattern_matches"][0]["line_text"], "Гранит")
         render_pages.assert_called_once_with(Path("test.pdf"), dpi=220)
         hatch_search.assert_not_called()
         area_search.assert_not_called()
+
+    def test_reuses_precomputed_legend_without_ocr_and_renders_only_legend_pages(self) -> None:
+        image = np.full((40, 40, 3), 255, dtype=np.uint8)
+        rendered_pages = [{"page": 2, "image": image}]
+        precomputed = {
+            "analysis_dpi": 200,
+            "legend_pages": [2],
+            "material_lines": [
+                {
+                    "page": 2,
+                    "text": "Гранит",
+                    "bbox": [1.0, 2.0, 3.0, 4.0],
+                    "confidence": 0.9,
+                    "source": "tesseract",
+                }
+            ],
+            "pattern_matches": [
+                {
+                    "page": 2,
+                    "line_text": "Гранит",
+                    "table_bbox": [0.0, 0.0, 10.0, 10.0],
+                    "row_bbox": [0.0, 0.0, 10.0, 5.0],
+                    "pattern_bbox": [1.0, 1.0, 5.0, 5.0],
+                    "score": 0.95,
+                }
+            ],
+        }
+
+        with (
+            patch.object(pipeline_logic, "require_module", return_value=object()),
+            patch.object(pipeline_logic, "make_run_dir", return_value=Path("run")),
+            patch.object(pipeline_logic, "save_pdf_next_to_log", return_value="run/test.pdf"),
+            patch.object(pipeline_logic, "render_pdf_pages", return_value=rendered_pages) as render,
+            patch.object(pipeline_logic, "collect_ocr_words") as collect_ocr,
+            patch.object(pipeline_logic, "find_page_legend_matches") as find_legend,
+            patch.object(
+                pipeline_logic,
+                "save_annotated_pattern_image",
+                side_effect=lambda page_image, match, run_dir, *, page: match,
+            ) as save,
+            patch.object(pipeline_logic, "find_hatch_pages", return_value=([], [])),
+        ):
+            result = pipeline_logic.analyze_pdf_file(
+                "test.pdf",
+                dpi=400,
+                precomputed_legend_analysis=precomputed,
+            )
+
+        render.assert_called_once_with(Path("test.pdf"), dpi=400, page_numbers=[2])
+        collect_ocr.assert_not_called()
+        find_legend.assert_not_called()
+        scaled_match = save.call_args.args[1]
+        self.assertEqual(scaled_match.pattern_bbox, (2.0, 2.0, 10.0, 10.0))
+        self.assertEqual(result["material_lines"][0]["bbox"], [2.0, 4.0, 6.0, 8.0])
+        self.assertEqual(result["legend_pages"], [2])
 
     def test_returns_empty_hatch_pages_when_no_legend_was_found(self) -> None:
         rendered_pages = [{"page": 1, "image": np.zeros((5, 5, 3), dtype=np.uint8)}]

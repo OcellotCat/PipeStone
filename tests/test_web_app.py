@@ -279,6 +279,13 @@ class WebAppTests(TestCase):
             job = web_app.jobs[upload["job_id"]]
             job["calculation_started_at"] = web_app.time.time()
             session_id = str(job["session_id"])
+            legend_analysis = {
+                "analysis_dpi": 220,
+                "legend_pages": [1],
+                "material_lines": [{"page": 1, "text": "Гранит", "bbox": [1, 2, 3, 4]}],
+                "pattern_matches": [{"page": 1, "line_text": "Гранит"}],
+            }
+            job["legend_analysis"] = legend_analysis
 
         analysis_result = {
             "legend_pages": [1],
@@ -286,11 +293,15 @@ class WebAppTests(TestCase):
             "hatch_pattern_box_pages": [],
             "area_calculation": {"pages": [], "total_area_m2": 0.0},
         }
-        with patch.object(web_app, "analyze_pdf_file", return_value=analysis_result), patch.object(
+        with patch.object(web_app, "analyze_pdf_file", return_value=analysis_result) as analyze, patch.object(
             web_app, "send_telegram_processing_success", return_value={"ok": True}
         ) as notify:
             web_app.calculate_job(upload["job_id"])
 
+        self.assertEqual(
+            analyze.call_args.kwargs["precomputed_legend_analysis"],
+            legend_analysis,
+        )
         notify.assert_called_once()
         filename, elapsed_seconds, notified_session_id = notify.call_args.args
         self.assertEqual(filename, "drawing.pdf")
@@ -298,11 +309,16 @@ class WebAppTests(TestCase):
         self.assertEqual(notified_session_id, session_id)
         with web_app.jobs_lock:
             self.assertEqual(web_app.jobs[upload["job_id"]]["status"], "completed")
+            self.assertTrue(all(stage["status"] == "completed" for stage in web_app.jobs[upload["job_id"]]["stages"]))
 
     def test_legend_search_makes_job_ready_and_returns_legends(self) -> None:
         upload = self.upload_valid_pdf().json()
         legend_result = {
             "legends": [{"page": 2, "name": "Натуральный гранит", "score": 0.95}],
+            "analysis_dpi": 220,
+            "legend_pages": [2],
+            "material_lines": [{"page": 2, "text": "Натуральный гранит", "bbox": [1, 2, 3, 4]}],
+            "pattern_matches": [{"page": 2, "line_text": "Натуральный гранит"}],
             "log_file": "legend.log",
         }
         with patch.object(web_app, "analyze_pdf_legends", return_value=legend_result) as analyze:
@@ -311,6 +327,9 @@ class WebAppTests(TestCase):
         status = self.client.get(f"/api/jobs/{upload['job_id']}").json()
         self.assertEqual(status["status"], "ready")
         self.assertEqual(status["legends"][0]["name"], "Натуральный гранит")
+        self.assertNotIn("legend_analysis", status)
+        with web_app.jobs_lock:
+            self.assertEqual(web_app.jobs[upload["job_id"]]["legend_analysis"]["analysis_dpi"], 220)
         analyze.assert_called_once()
 
     def test_legend_search_reports_missing_stone_information(self) -> None:
@@ -335,3 +354,56 @@ class WebAppTests(TestCase):
         self.assertEqual(groups[0]["count"], 3)
         self.assertEqual(groups[0]["area_m2"], 1.5)
         self.assertEqual(groups[0]["pages"], [1, 3])
+
+    def test_merge_area_buckets_matches_normalized_name_and_exact_dimensions(self) -> None:
+        merged = web_app.merge_area_buckets(
+            {
+                "pages": [
+                    {
+                        "page": 1,
+                        "unique_elements": {
+                            "Гранит": {
+                                "count": 2,
+                                "horizontal_dimensions": ["1000"],
+                                "vertical_dimensions": ["500"],
+                                "total_area_m2": 1.0,
+                            }
+                        },
+                    },
+                    {
+                        "page": 2,
+                        "unique_elements": {
+                            "  гранит ": {
+                                "count": 3,
+                                "horizontal_dimensions": ["1000.0"],
+                                "vertical_dimensions": ["500,0"],
+                                "total_area_m2": 1.5,
+                            }
+                        },
+                    },
+                    {
+                        "page": 3,
+                        "unique_elements": {
+                            "Гранит": {
+                                "count": 1,
+                                "horizontal_dimensions": ["1200"],
+                                "vertical_dimensions": ["500"],
+                                "total_area_m2": 0.6,
+                            }
+                        },
+                    },
+                ]
+            }
+        )
+
+        self.assertEqual(len(merged["groups"]), 2)
+        same_size = next(group for group in merged["groups"] if group["horizontal_dimensions"] == ["1000"])
+        self.assertEqual(same_size["count"], 5)
+        self.assertEqual(same_size["area_m2"], 2.5)
+        self.assertEqual(same_size["pages"], [1, 2])
+        self.assertEqual(merged["total_area_m2"], 3.1)
+
+    def test_web_stages_include_bucket_merge_after_area(self) -> None:
+        stages = web_app.initial_stages()
+
+        self.assertEqual([stage["id"] for stage in stages], ["legend", "symbol", "pages", "area", "merge"])

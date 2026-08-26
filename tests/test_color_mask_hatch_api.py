@@ -39,6 +39,21 @@ class ColorMaskHatchApiTest(unittest.TestCase):
 
         self.assertEqual(len(results), 2)
 
+    def test_accepts_fully_bright_blue_hatch(self) -> None:
+        hatch_patch = np.full((32, 32, 3), 255, dtype=np.uint8)
+        for offset in range(-32, 32, 6):
+            rows = np.arange(32)
+            columns = rows + offset
+            valid = (columns >= 0) & (columns < 32)
+            hatch_patch[rows[valid], columns[valid]] = (0, 0, 255)
+        image = np.tile(hatch_patch, (2, 2, 1))
+
+        result = process_images([image], hatch_patch, min_bound_area=1)[0]
+
+        self.assertGreater(int(np.count_nonzero(result["color_mask"])), 0)
+        self.assertGreater(len(result["bounds"]), 0)
+        self.assertEqual(result["hatch_definition"]["colors"][0]["hex"], "#0000f8")
+
     def test_rejects_non_rgb_image(self) -> None:
         patch = self._patch()
 

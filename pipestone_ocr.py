@@ -252,7 +252,11 @@ def run_tesseract_ocr(
     return words, None
 
 
-def render_pdf_pages(pdf_path: Path, dpi: int = 220) -> list[dict]:
+def render_pdf_pages(
+    pdf_path: Path,
+    dpi: int = 220,
+    page_numbers: list[int] | set[int] | None = None,
+) -> list[dict]:
     fitz = require_module("fitz", "pip install pymupdf")
     np = require_module("numpy", "pip install numpy")
 
@@ -260,7 +264,10 @@ def render_pdf_pages(pdf_path: Path, dpi: int = 220) -> list[dict]:
     doc = fitz.open(str(pdf_path))
     zoom = dpi / 72.0
     matrix = fitz.Matrix(zoom, zoom)
+    selected_pages = set(page_numbers) if page_numbers is not None else None
     for index, page in enumerate(doc, start=1):
+        if selected_pages is not None and index not in selected_pages:
+            continue
         pix = page.get_pixmap(matrix=matrix, alpha=False)
         image = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
         if pix.n == 4:
@@ -274,5 +281,10 @@ def render_pdf_pages(pdf_path: Path, dpi: int = 220) -> list[dict]:
             "height_pt": float(page.rect.height),
         })
     doc.close()
-    logger.info("PDF rendered: %s pages at %s DPI", len(pages), dpi)
+    logger.info(
+        "PDF rendered: %s pages at %s DPI%s",
+        len(pages),
+        dpi,
+        f" (selected pages: {sorted(selected_pages)})" if selected_pages is not None else "",
+    )
     return pages
