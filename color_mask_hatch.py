@@ -767,7 +767,9 @@ def recognize_vertical_dimension(
     # left and right. They may lie outside both the cell and the hatch-bound.
     image_height, image_width = image_rgb.shape[:2]
     search_width = max(60, int(outer_bound["width"]) * 3 // 2)
-    pad_y = max(2, int(cell["height"]) // 12)
+    # Keep almost the complete Y span: the first/last chained size can sit
+    # close to the bound edge (for example the final 650 mm segment).
+    pad_y = max(2, int(cell["height"]) // 30)
     top = max(0, int(cell["y"]) + pad_y)
     bottom = min(image_height, int(cell["y1"]) - pad_y)
     zones = [
@@ -870,11 +872,34 @@ def recognize_external_horizontal_dimension(
     """Read only external horizontal zones and prefer the cell-scale match."""
     image_height, image_width = image_rgb.shape[:2]
     search_height = max(80, int(outer_bound["height"]) * 2 // 3)
-    left = max(0, int(cell["x"]) + int(cell["width"]) // 12)
-    right = min(image_width, int(cell["x1"]) - int(cell["width"]) // 12)
+    left = max(0, int(cell["x"]))
+    right = min(image_width, int(cell["x1"]))
+    # CAD dimension text is shifted slightly off the centre line so the line
+    # does not cross the glyphs. Follow that conventional rightward offset.
+    center_x = (left + right) // 2 + max(1, int(cell["width"]) // 50)
+    focus_half_width = max(25, int(cell["width"]) // 7)
+    focus_offset = max(4, int(cell["width"]) // 16)
+    focus_height = max(40, int(cell["width"]) // 4)
     zones = [
         image_rgb[int(outer_bound["y1"]) : min(image_height, int(outer_bound["y1"]) + search_height), left:right],
         image_rgb[max(0, int(outer_bound["y"]) - search_height) : int(outer_bound["y"]), left:right],
+        # Dimension text is often centred between the two extension lines.
+        # Focused bands exclude most neighbouring axial dimensions and allow
+        # thin CAD digits such as 995 to survive OCR beside long guide lines.
+        image_rgb[
+            min(image_height, int(outer_bound["y1"]) + focus_offset) : min(
+                image_height,
+                int(outer_bound["y1"]) + focus_offset + focus_height,
+            ),
+            max(0, center_x - focus_half_width) : min(image_width, center_x + focus_half_width),
+        ],
+        image_rgb[
+            max(0, int(outer_bound["y"]) - focus_offset - focus_height) : max(
+                0,
+                int(outer_bound["y"]) - focus_offset,
+            ),
+            max(0, center_x - focus_half_width) : min(image_width, center_x + focus_half_width),
+        ],
         image_rgb[
             int(cell["y"]) : int(cell["y1"]),
             max(0, int(outer_bound["x"]) - max(60, int(outer_bound["width"]) // 3)) : int(outer_bound["x"]),
