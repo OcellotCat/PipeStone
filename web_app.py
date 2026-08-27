@@ -399,11 +399,12 @@ def initial_stages() -> list[dict[str, str]]:
         {"id": "symbol", "label": "Поиск условного обозначения", "status": "pending"},
         {"id": "pages", "label": "Поиск страниц в файле", "status": "pending"},
         {"id": "area", "label": "Подсчёт площади", "status": "pending"},
+        {"id": "merge", "label": "Объединение результатов", "status": "pending"},
     ]
 
 
 def update_progress(job_id: str, stage: str, percent: int, message: str) -> None:
-    stage_order = ["legend", "symbol", "pages", "area"]
+    stage_order = ["legend", "symbol", "pages", "area", "merge"]
     with jobs_lock:
         job = jobs[job_id]
         if job.get("cancel_requested"):
@@ -624,10 +625,11 @@ def calculate_job(job_id: str) -> None:
             progress_callback=progress_with_metrics,
         )
         area = result.get("area_calculation", {})
-        progress_with_metrics("complete", 100, "")
+        progress_with_metrics("merge", 98, "Объединение одинаковых результатов")
         merge_started_at = time.perf_counter()
         merged_buckets = merge_area_buckets(area)
         STAGE_DURATION.labels("merge").observe(time.perf_counter() - merge_started_at)
+        progress_with_metrics("complete", 100, "")
         web_result = {
             "legend_pages": result.get("legend_pages", []),
             "hatch_pages": result.get("hatch_pages", []),

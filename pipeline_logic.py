@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from difflib import SequenceMatcher
 import importlib.util
 import logging
 import math
@@ -256,10 +257,22 @@ def legend_title_word_kind(text: str) -> str | None:
     compact = re.sub(r"[^a-zа-яе]+", "", normalized)
     if not compact:
         return None
-    if compact.startswith("услов") or compact.startswith("усл"):
+    if compact.startswith("условн"):
         return "condition"
-    if compact.startswith("обознач") or compact.startswith("обозн"):
+    if compact.startswith("обозначен"):
         return "designation"
+
+    # Scanned drawings often lose or substitute one or two characters in this
+    # heading.  Keep the fuzzy check deliberately narrow: only sufficiently
+    # long OCR tokens that are close to a known heading word are accepted.
+    if len(compact) >= 5:
+        targets = {
+            "condition": ("условные", "условный"),
+            "designation": ("обозначения", "обозначение", "обозначений"),
+        }
+        for kind, variants in targets.items():
+            if max(SequenceMatcher(None, compact, variant).ratio() for variant in variants) >= 0.72:
+                return kind
     return None
 
 
@@ -435,7 +448,14 @@ def find_legend_pattern_match(
     best: LegendPatternMatch | None = None
     table_bboxes = find_named_legend_table_bboxes(processed["binary"], words)
     if not table_bboxes:
-        logger.info("No named legend table found; falling back to row search in all detected tables")
+        # A tiny CAD-table title can disappear at high render DPI even when
+        # the material row and the table grid are recognized correctly. Keep
+        # the title as the preferred signal, then fall back to the stricter
+        # structural check below (table + matching material row + sample cell).
+        logger.info(
+            "No readable legend-title marker on page %s; using structured table fallback",
+            page,
+        )
         table_bboxes = find_legend_table_bboxes(processed["binary"])
 
     for table_bbox in table_bboxes:
@@ -784,6 +804,25 @@ def bbox_overlap_ratio(a: tuple[float, float, float, float], b: tuple[float, flo
     area_a = max(1.0, (a[2] - a[0]) * (a[3] - a[1]))
     area_b = max(1.0, (b[2] - b[0]) * (b[3] - b[1]))
     return inter / min(area_a, area_b)
+
+
+def bbox_covered_fraction(
+    candidate: tuple[float, float, float, float],
+    cover: tuple[float, float, float, float],
+) -> float:
+    """Return the fraction of a candidate that lies inside another box."""
+    ix0 = max(candidate[0], cover[0])
+    iy0 = max(candidate[1], cover[1])
+    ix1 = min(candidate[2], cover[2])
+    iy1 = min(candidate[3], cover[3])
+    if ix1 <= ix0 or iy1 <= iy0:
+        return 0.0
+    intersection = (ix1 - ix0) * (iy1 - iy0)
+    candidate_area = max(
+        1.0,
+        (candidate[2] - candidate[0]) * (candidate[3] - candidate[1]),
+    )
+    return intersection / candidate_area
 
 
 def template_match_candidates(
@@ -1179,6 +1218,7 @@ def analyze_pdf_legends(
         percent = 45 + round(50 * index / max(1, len(rendered_pages)))
         report_progress(progress_callback, "legend", percent, f"Проверена страница {page}")
 
+    legend_matches = select_unique_legend_matches(legend_matches)
     legends = [
         {
             "page": match.page,
@@ -1203,6 +1243,44 @@ def analyze_pdf_legends(
         "material_lines": [material_line_to_dict(line) for line in material_lines],
         "pattern_matches": [match_to_dict(match) for match in legend_matches],
     }
+
+
+def select_unique_legend_matches(matches: list[LegendPatternMatch]) -> list[LegendPatternMatch]:
+    """Keep one representative when the same legend is repeated on many sheets."""
+    matches_by_label: dict[str, list[LegendPatternMatch]] = {}
+    for match in matches:
+        normalized_label = normalize_text(match.line_text)
+        # Every match currently originates from a natural-stone material line.
+        # OCR may add neighboring drawing text to that line on individual
+        # sheets, so use a stable semantic key for those equivalent rows.
+        label_key = "natural_stone" if STONE_KEYWORD_RE.search(normalized_label) else normalized_label
+        matches_by_label.setdefault(label_key, []).append(match)
+
+    selected: list[LegendPatternMatch] = []
+    for label_matches in matches_by_label.values():
+        by_geometry: dict[tuple[int, int], list[LegendPatternMatch]] = {}
+        for match in label_matches:
+            table_width = int(round(match.table_bbox[2] - match.table_bbox[0]))
+            table_height = int(round(match.table_bbox[3] - match.table_bbox[1]))
+            by_geometry.setdefault((table_width, table_height), []).append(match)
+
+        # Repeated CAD sheets normally preserve the legend at exactly the same
+        # rendered size. Prefer that dominant copy and keep its first page.
+        dominant = max(
+            by_geometry.values(),
+            key=lambda group: (len(group), -min(match.page for match in group)),
+        )
+        selected.append(min(dominant, key=lambda match: match.page))
+
+    selected.sort(key=lambda match: (match.page, normalize_text(match.line_text)))
+    if len(selected) != len(matches):
+        logger.info(
+            "Repeated legend tables collapsed: matches=%s unique=%s pages=%s",
+            len(matches),
+            len(selected),
+            [match.page for match in selected],
+        )
+    return selected
 
 
 def material_line_from_dict(item: dict[str, Any], *, scale: float = 1.0) -> MaterialLine:
@@ -1286,7 +1364,7 @@ def find_hatch_pages(
                 candidate
                 for candidate in recognition.get("matches", [])
                 if not any(
-                    bbox_overlap_ratio(tuple(candidate["bbox"]), table_bbox) > 0.2
+                    bbox_covered_fraction(tuple(candidate["bbox"]), table_bbox) > 0.2
                     for table_bbox in excluded_tables
                 )
             ]
@@ -1472,6 +1550,12 @@ def analyze_pdf_file(
         for item in precomputed_legend_analysis.get("pattern_matches", []):
             match = legend_match_from_dict(item, scale=scale)
             legend_matches_by_page.setdefault(match.page, []).append(match)
+        unique_matches = select_unique_legend_matches(
+            [match for matches in legend_matches_by_page.values() for match in matches]
+        )
+        legend_matches_by_page = {}
+        for match in unique_matches:
+            legend_matches_by_page.setdefault(match.page, []).append(match)
         legend_pages = sorted(legend_matches_by_page)
         if not legend_pages:
             raise ValueError("Precomputed legend analysis does not contain pattern matches")
@@ -1507,6 +1591,12 @@ def analyze_pdf_file(
             all_material_lines.extend(material_lines)
             if matches:
                 legend_matches_by_page[page] = matches
+        unique_matches = select_unique_legend_matches(
+            [match for matches in legend_matches_by_page.values() for match in matches]
+        )
+        legend_matches_by_page = {}
+        for match in unique_matches:
+            legend_matches_by_page.setdefault(match.page, []).append(match)
         report_progress(progress_callback, "legend", 30, "Поиск легенды завершён")
 
     if save_rendered_pages:

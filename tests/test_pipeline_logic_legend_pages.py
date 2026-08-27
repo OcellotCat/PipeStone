@@ -66,6 +66,66 @@ class AnalyzePdfLegendPagesTests(TestCase):
             self.assertEqual(saved, str(destination))
             self.assertEqual(destination.read_bytes(), source.read_bytes())
 
+    def test_legend_title_accepts_ocr_errors_in_designation_word(self) -> None:
+        self.assertEqual(
+            pipeline_logic.legend_title_word_kind("обозначения"),
+            "designation",
+        )
+        self.assertEqual(
+            pipeline_logic.legend_title_word_kind("обозначени"),
+            "designation",
+        )
+        self.assertEqual(
+            pipeline_logic.legend_title_word_kind("обозначния"),
+            "designation",
+        )
+        self.assertIsNone(pipeline_logic.legend_title_word_kind("облицовка"))
+
+    def test_unreadable_title_uses_structured_table_fallback(self) -> None:
+        image = np.full((40, 40, 3), 255, dtype=np.uint8)
+        target = pipeline_logic.MaterialLine(
+            page=5,
+            text="изделия из натурального камня",
+            bbox=(1.0, 1.0, 20.0, 5.0),
+            confidence=1.0,
+            source="test",
+        )
+
+        with (
+            patch.object(pipeline_logic, "preprocess_image", return_value={"binary": image[:, :, 0]}),
+            patch.object(pipeline_logic, "table_line_masks", return_value=(image[:, :, 0], image[:, :, 0], image[:, :, 0])),
+            patch.object(pipeline_logic, "find_named_legend_table_bboxes", return_value=[]),
+            patch.object(pipeline_logic, "find_legend_table_bboxes", return_value=[]) as all_tables,
+        ):
+            match = pipeline_logic.find_legend_pattern_match(image, [], target, page=5)
+
+        self.assertIsNone(match)
+        all_tables.assert_called_once()
+
+    def test_repeated_legend_tables_use_first_page_of_dominant_copy(self) -> None:
+        def match(page: int, width: float, height: float) -> pipeline_logic.LegendPatternMatch:
+            return pipeline_logic.LegendPatternMatch(
+                page=page,
+                line_text="Натуральный камень 30 мм",
+                table_bbox=(0.0, 0.0, width, height),
+                row_bbox=(0.0, 1.0, width, 2.0),
+                pattern_bbox=(0.0, 1.0, 10.0, 2.0),
+                score=1.0,
+                annotated_image="",
+            )
+
+        repeated = [
+            match(5, 740.0, 559.0),
+            match(6, 742.0, 560.0),
+            match(7, 742.0, 560.0),
+            match(8, 741.0, 559.0),
+            match(9, 742.0, 560.0),
+        ]
+
+        selected = pipeline_logic.select_unique_legend_matches(repeated)
+
+        self.assertEqual([item.page for item in selected], [6])
+
     def test_searches_all_pages_and_returns_hatch_and_legend_pages(self) -> None:
         image = np.full((20, 20, 3), 255, dtype=np.uint8)
         rendered_pages = [
@@ -115,6 +175,35 @@ class AnalyzePdfLegendPagesTests(TestCase):
         self.assertEqual(result["hatch_page_matches"][0]["page"], 3)
         self.assertEqual(search.call_count, 3)
         save.assert_called_once_with(rendered_pages[1]["image"], legend_match, Path("run"), page=2)
+
+    def test_page_sized_match_is_not_discarded_for_containing_small_legend_table(self) -> None:
+        image = np.full((100, 100, 3), 255, dtype=np.uint8)
+        legend_match = pipeline_logic.LegendPatternMatch(
+            page=1,
+            line_text="Натуральный камень 30 мм",
+            table_bbox=(80.0, 0.0, 100.0, 20.0),
+            row_bbox=(80.0, 5.0, 100.0, 10.0),
+            pattern_bbox=(80.0, 5.0, 85.0, 10.0),
+            score=1.0,
+            annotated_image="",
+        )
+
+        with (
+            patch.object(pipeline_logic, "_legend_pattern_crop", return_value=image[:5, :5]),
+            patch.object(
+                pipeline_logic,
+                "recognize_hatch_pattern",
+                return_value={"matches": [{"bbox": [0.0, 0.0, 100.0, 100.0]}]},
+            ),
+        ):
+            pages, matches = pipeline_logic.find_hatch_pages(
+                [{"page": 1, "image": image}],
+                {1: [legend_match]},
+                Path("run"),
+            )
+
+        self.assertEqual(pages, [1])
+        self.assertEqual(matches[0]["page"], 1)
 
     def test_legend_only_analysis_does_not_run_hatch_or_area_processing(self) -> None:
         image = np.full((10, 10, 3), 255, dtype=np.uint8)
