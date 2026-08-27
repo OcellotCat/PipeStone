@@ -204,6 +204,7 @@ def mask_by_palette(
     target_max_value: int,
     hue_threshold: int,
     chunk_size: int = 250_000,
+    workers: int = 4,
 ) -> tuple[np.ndarray, np.ndarray]:
     target_lab = cv2.cvtColor(target_rgb, cv2.COLOR_RGB2LAB).reshape(-1, 3).astype(np.float32)
     palette_lab = cv2.cvtColor(palette_rgb.reshape(1, -1, 3), cv2.COLOR_RGB2LAB).reshape(-1, 3).astype(np.float32)
@@ -216,7 +217,7 @@ def mask_by_palette(
     mask = np.zeros(flat_target.shape[0], dtype=bool)
     threshold_sq = distance_threshold * distance_threshold
 
-    for start in range(0, target_lab.shape[0], chunk_size):
+    def match_chunk(start: int, end: int) -> tuple[int, int, np.ndarray, np.ndarray]:
         end = min(start + chunk_size, target_lab.shape[0])
         diff = target_lab[start:end, None, :] - palette_lab[None, :, :]
         distances_sq = np.sum(diff * diff, axis=2)
@@ -228,12 +229,35 @@ def mask_by_palette(
             & (hue_diff <= hue_threshold)
             & color_gate[start:end]
         )
+        return start, end, matched, nearest
 
-        mask[start:end] = matched
-        if preserve_source_colors:
-            output[start:end][matched] = flat_target[start:end][matched]
-        else:
-            output[start:end][matched] = palette_rgb[nearest[matched]]
+    chunk_ranges = [
+        (start, min(start + chunk_size, target_lab.shape[0]))
+        for start in range(0, target_lab.shape[0], chunk_size)
+    ]
+    effective_workers = min(max(1, int(workers)), len(chunk_ranges)) if chunk_ranges else 0
+    if effective_workers > 1:
+        with ThreadPoolExecutor(
+            max_workers=effective_workers,
+            thread_name_prefix="palette-mask",
+        ) as executor:
+            for start, end, matched, nearest in executor.map(
+                lambda bounds: match_chunk(*bounds),
+                chunk_ranges,
+            ):
+                mask[start:end] = matched
+                if preserve_source_colors:
+                    output[start:end][matched] = flat_target[start:end][matched]
+                else:
+                    output[start:end][matched] = palette_rgb[nearest[matched]]
+    else:
+        for start, end in chunk_ranges:
+            start, end, matched, nearest = match_chunk(start, end)
+            mask[start:end] = matched
+            if preserve_source_colors:
+                output[start:end][matched] = flat_target[start:end][matched]
+            else:
+                output[start:end][matched] = palette_rgb[nearest[matched]]
 
     height, width = target_rgb.shape[:2]
     return output.reshape(height, width, 3), mask.reshape(height, width)
@@ -244,6 +268,7 @@ def gabor_hatch_response(
     color_mask: np.ndarray,
     hatch_definition: dict[str, object],
     tile_size: int = 1024,
+    workers: int = 4,
 ) -> np.ndarray:
     gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
     gray = cv2.GaussianBlur(gray, (3, 3), 0)
@@ -291,47 +316,91 @@ def gabor_hatch_response(
         response_map = np.memmap(backing_path, dtype=np.float32, mode="w+", shape=(image_height, image_width))
         response_min = math.inf
         response_max = -math.inf
-        for top in range(0, image_height, tile_size):
-            bottom = min(image_height, top + tile_size)
+
+        tile_specs = [
+            (
+                top,
+                min(image_height, top + tile_size),
+                left,
+                min(image_width, left + tile_size),
+            )
+            for top in range(0, image_height, tile_size)
+            for left in range(0, image_width, tile_size)
+        ]
+
+        def filter_tile(spec: tuple[int, int, int, int]) -> tuple[int, int, int, int, np.ndarray, float, float]:
+            top, bottom, left, right = spec
             source_top = max(0, top - halo)
             source_bottom = min(image_height, bottom + halo)
-            for left in range(0, image_width, tile_size):
-                right = min(image_width, left + tile_size)
-                source_left = max(0, left - halo)
-                source_right = min(image_width, right + halo)
-                tile = inverted[source_top:source_bottom, source_left:source_right]
-                tile_response = cv2.filter2D(tile, cv2.CV_32F, kernel)
-                np.abs(tile_response, out=tile_response)
-                np.multiply(
-                    tile_response,
-                    color_mask[source_top:source_bottom, source_left:source_right],
-                    out=tile_response,
-                )
-                cv2.GaussianBlur(tile_response, (5, 5), 0, dst=tile_response)
-                crop_top = top - source_top
-                crop_left = left - source_left
-                core = tile_response[
+            source_left = max(0, left - halo)
+            source_right = min(image_width, right + halo)
+            tile = inverted[source_top:source_bottom, source_left:source_right]
+            tile_response = cv2.filter2D(tile, cv2.CV_32F, kernel)
+            np.abs(tile_response, out=tile_response)
+            np.multiply(
+                tile_response,
+                color_mask[source_top:source_bottom, source_left:source_right],
+                out=tile_response,
+            )
+            cv2.GaussianBlur(tile_response, (5, 5), 0, dst=tile_response)
+            crop_top = top - source_top
+            crop_left = left - source_left
+            core = np.ascontiguousarray(
+                tile_response[
                     crop_top : crop_top + (bottom - top),
                     crop_left : crop_left + (right - left),
                 ]
+            )
+            return top, bottom, left, right, core, float(np.min(core)), float(np.max(core))
+
+        effective_workers = min(max(1, int(workers)), len(tile_specs))
+        if effective_workers > 1:
+            with ThreadPoolExecutor(
+                max_workers=effective_workers,
+                thread_name_prefix="gabor-tile",
+            ) as executor:
+                for top, bottom, left, right, core, core_min, core_max in executor.map(
+                    filter_tile,
+                    tile_specs,
+                ):
+                    response_map[top:bottom, left:right] = core
+                    response_min = min(response_min, core_min)
+                    response_max = max(response_max, core_max)
+        else:
+            for spec in tile_specs:
+                top, bottom, left, right, core, core_min, core_max = filter_tile(spec)
                 response_map[top:bottom, left:right] = core
-                response_min = min(response_min, float(np.min(core)))
-                response_max = max(response_max, float(np.max(core)))
+                response_min = min(response_min, core_min)
+                response_max = max(response_max, core_max)
 
         normalized = np.zeros((image_height, image_width), dtype=np.uint8)
         if response_max > response_min:
             scale = 255.0 / (response_max - response_min)
-            for top in range(0, image_height, tile_size):
-                bottom = min(image_height, top + tile_size)
-                for left in range(0, image_width, tile_size):
-                    right = min(image_width, left + tile_size)
-                    values = response_map[top:bottom, left:right]
-                    normalized[top:bottom, left:right] = np.clip(
-                        (values - response_min) * scale,
-                        0,
-                        255,
-                    ).astype(np.uint8)
-            del values
+
+            def normalize_tile(spec: tuple[int, int, int, int]) -> tuple[int, int, int, int, np.ndarray]:
+                top, bottom, left, right = spec
+                values = response_map[top:bottom, left:right]
+                tile_normalized = np.clip(
+                    (values - response_min) * scale,
+                    0,
+                    255,
+                ).astype(np.uint8)
+                return top, bottom, left, right, tile_normalized
+
+            if effective_workers > 1:
+                with ThreadPoolExecutor(
+                    max_workers=effective_workers,
+                    thread_name_prefix="gabor-normalize",
+                ) as executor:
+                    for top, bottom, left, right, tile_normalized in executor.map(
+                        normalize_tile,
+                        tile_specs,
+                    ):
+                        normalized[top:bottom, left:right] = tile_normalized
+            else:
+                for spec in tile_specs:
+                    top, bottom, left, right, tile_normalized = normalize_tile(spec)
+                    normalized[top:bottom, left:right] = tile_normalized
         response_map.flush()
         response_map._mmap.close()
         del response_map
@@ -2331,6 +2400,7 @@ def process_images(
     euclidean_bucket_tolerance_px: float = 6.0,
     post_ocr_bucket_merge_tolerance_px: float = 6.0,
     formal_size_merge_tolerance_mm: float = 10.0,
+    compute_workers: int = 4,
     map_workers: int = 4,
     verbose: bool = False,
     progress_callback: Callable[[int, str], None] | None = None,
@@ -2375,6 +2445,7 @@ def process_images(
             target_min_saturation,
             target_max_value,
             hue_threshold,
+            workers=compute_workers,
         )
         if progress_callback is not None:
             progress_callback(20, f"Цветовая маска страницы {index + 1} построена")
@@ -2383,6 +2454,7 @@ def process_images(
             color_mask,
             hatch_definition,
             tile_size=gabor_tile_size,
+            workers=compute_workers,
         )
         if progress_callback is not None:
             progress_callback(45, f"Штриховка страницы {index + 1} найдена")
@@ -2559,6 +2631,12 @@ def main() -> int:
         help="Final Euclidean size tolerance in millimetres; canonical name keeps the highest original count.",
     )
     parser.add_argument(
+        "--compute-workers",
+        type=int,
+        default=4,
+        help="Concurrent workers for palette chunks and Gabor tiles.",
+    )
+    parser.add_argument(
         "--map-workers",
         type=int,
         default=4,
@@ -2627,6 +2705,7 @@ def main() -> int:
         args.target_min_saturation,
         args.target_max_value,
         args.hue_threshold,
+        workers=args.compute_workers,
     )
 
     write_rgb(output_path, masked_rgb)
@@ -2635,7 +2714,13 @@ def main() -> int:
         mask_path.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(mask_path), (mask.astype(np.uint8) * 255))
 
-    gabor_response = gabor_hatch_response(target_rgb, mask, hatch_definition, tile_size=args.gabor_tile_size)
+    gabor_response = gabor_hatch_response(
+        target_rgb,
+        mask,
+        hatch_definition,
+        tile_size=args.gabor_tile_size,
+        workers=args.compute_workers,
+    )
     gabor_mask = build_gabor_match_mask(
         gabor_response,
         mask,

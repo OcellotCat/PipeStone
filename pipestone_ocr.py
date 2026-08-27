@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import logging
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import median
@@ -65,6 +66,8 @@ def extract_pdf_text_words(pdf_path: Path, rendered_pages: list[dict]) -> dict[i
 
     doc = fitz.open(str(pdf_path))
     for index, page in enumerate(doc, start=1):
+        if index not in page_by_number:
+            continue
         rendered = page_by_number[index]
         scale_x = rendered["width_px"] / max(float(page.rect.width), 1.0)
         scale_y = rendered["height_px"] / max(float(page.rect.height), 1.0)
@@ -132,35 +135,57 @@ def collect_ocr_words(
     force_ocr: bool,
     tesseract_psm: int = 11,
     tesseract_language: str = DEFAULT_TESSERACT_LANGUAGE,
+    ocr_workers: int = 4,
 ) -> dict[int, list[OcrWord]]:
     text_words = extract_pdf_text_words(pdf_path, rendered_pages)
     words_by_page: dict[int, list[OcrWord]] = defaultdict(list)
     warnings: list[str] = []
 
+    pending_pages: list[tuple[dict, list[OcrWord]]] = []
     for page in rendered_pages:
         pdf_words = text_words.get(page["page"], [])
         if pdf_words and not force_ocr:
             words_by_page[page["page"]].extend(pdf_words)
             logger.info("Page %s OCR: using PDF text layer (%s words)", page["page"], len(pdf_words))
             continue
+        pending_pages.append((page, pdf_words))
 
-        if pdf_words:
-            words_by_page[page["page"]].extend(pdf_words)
-
-        image_words, warning = run_image_ocr(
-            page["image"],
-            page["page"],
-            backend,
-            tesseract_psm=tesseract_psm,
-            tesseract_language=tesseract_language,
+    completed: dict[int, tuple[list[OcrWord], str | None]] = {}
+    effective_workers = min(max(1, int(ocr_workers)), len(pending_pages)) if pending_pages else 0
+    if effective_workers:
+        logger.info(
+            "OCR: processing %s image pages with %s parallel workers",
+            len(pending_pages),
+            effective_workers,
         )
+        with ThreadPoolExecutor(max_workers=effective_workers, thread_name_prefix="page-ocr") as executor:
+            futures = {
+                executor.submit(
+                    run_image_ocr,
+                    page["image"],
+                    page["page"],
+                    backend,
+                    tesseract_psm=tesseract_psm,
+                    tesseract_language=tesseract_language,
+                ): int(page["page"])
+                for page, _ in pending_pages
+            }
+            for future in as_completed(futures):
+                completed[futures[future]] = future.result()
+
+    # Merge in source-page order so output and log ordering stay deterministic.
+    for page, pdf_words in pending_pages:
+        page_number = int(page["page"])
+        image_words, warning = completed[page_number]
+        if pdf_words:
+            words_by_page[page_number].extend(pdf_words)
         if warning:
-            warnings.append(f"page {page['page']}: {warning}")
-            logger.warning("Page %s OCR warning: %s", page["page"], warning)
-        words_by_page[page["page"]].extend(image_words)
+            warnings.append(f"page {page_number}: {warning}")
+            logger.warning("Page %s OCR warning: %s", page_number, warning)
+        words_by_page[page_number].extend(image_words)
         logger.info(
             "Page %s OCR: %s image words, %s PDF words",
-            page["page"],
+            page_number,
             len(image_words),
             len(pdf_words),
         )

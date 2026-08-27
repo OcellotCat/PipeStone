@@ -126,6 +126,50 @@ class AnalyzePdfLegendPagesTests(TestCase):
 
         self.assertEqual([item.page for item in selected], [6])
 
+    def test_keeps_each_page_with_a_readable_legend_title(self) -> None:
+        def match(page: int) -> pipeline_logic.LegendPatternMatch:
+            return pipeline_logic.LegendPatternMatch(
+                page=page,
+                line_text="Натуральный камень 30 мм",
+                table_bbox=(0.0, 0.0, 740.0, 560.0),
+                row_bbox=(0.0, 1.0, 740.0, 2.0),
+                pattern_bbox=(0.0, 1.0, 10.0, 2.0),
+                score=1.0,
+                annotated_image="",
+            )
+
+        selected = pipeline_logic.select_unique_legend_matches(
+            [match(1), match(2)],
+            preferred_pages={1, 2},
+        )
+
+        self.assertEqual([item.page for item in selected], [1, 2])
+
+    def test_collapses_fuzzy_title_matches_with_varying_geometry(self) -> None:
+        def match(page: int, width: float, height: float) -> pipeline_logic.LegendPatternMatch:
+            return pipeline_logic.LegendPatternMatch(
+                page=page,
+                line_text="Натуральный камень 30 мм",
+                table_bbox=(0.0, 0.0, width, height),
+                row_bbox=(0.0, 1.0, width, 2.0),
+                pattern_bbox=(0.0, 1.0, 10.0, 2.0),
+                score=1.0,
+                annotated_image="",
+            )
+
+        selected = pipeline_logic.select_unique_legend_matches(
+            [
+                match(5, 740.0, 559.0),
+                match(6, 742.0, 560.0),
+                match(7, 742.0, 560.0),
+                match(8, 741.0, 559.0),
+                match(9, 742.0, 560.0),
+            ],
+            preferred_pages={5, 6, 7, 8, 9},
+        )
+
+        self.assertEqual([item.page for item in selected], [6])
+
     def test_searches_all_pages_and_returns_hatch_and_legend_pages(self) -> None:
         image = np.full((20, 20, 3), 255, dtype=np.uint8)
         rendered_pages = [

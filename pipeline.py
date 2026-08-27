@@ -1,11 +1,27 @@
 #!/usr/bin/env python3
 """PipeStone - facade layout PDF analyzer. Entry point wrapper."""
 
-from pipeline_logic import APP_NAME, DEFAULT_DPI, DEFAULT_OUTPUT_DIR, analyze_image_file, analyze_pdf_file, setup_logging
+from pipeline_logic import (
+    APP_NAME,
+    DEFAULT_DPI,
+    DEFAULT_OCR_WORKERS,
+    DEFAULT_OUTPUT_DIR,
+    analyze_image_file,
+    analyze_pdf_file,
+    setup_logging,
+)
 from pipestone_ocr import DEFAULT_TESSERACT_LANGUAGE
 
 # Re-export for backward compatibility
-__all__ = ["analyze_pdf_file", "analyze_image_file", "setup_logging", "APP_NAME", "DEFAULT_DPI", "DEFAULT_OUTPUT_DIR"]
+__all__ = [
+    "analyze_pdf_file",
+    "analyze_image_file",
+    "setup_logging",
+    "APP_NAME",
+    "DEFAULT_DPI",
+    "DEFAULT_OCR_WORKERS",
+    "DEFAULT_OUTPUT_DIR",
+]
 
 if __name__ == "__main__":
     import argparse
@@ -18,6 +34,7 @@ if __name__ == "__main__":
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--ocr-backend", default="auto")
     parser.add_argument("--ocr-language", default=DEFAULT_TESSERACT_LANGUAGE)
+    parser.add_argument("--ocr-workers", type=int, default=DEFAULT_OCR_WORKERS)
     parser.add_argument("--force-ocr", action="store_true")
     parser.add_argument(
         "--calculate-area",
@@ -48,6 +65,7 @@ if __name__ == "__main__":
             output_dir=args.output_dir,
             ocr_backend=args.ocr_backend,
             tesseract_language=args.ocr_language,
+            ocr_workers=args.ocr_workers,
             force_ocr=args.force_ocr,
             calculate_area=args.calculate_area,
         )

@@ -3,7 +3,13 @@ from unittest.mock import patch
 
 import numpy as np
 
-from color_mask_hatch import process_images
+from color_mask_hatch import (
+    build_hatch_definition,
+    build_palette,
+    gabor_hatch_response,
+    mask_by_palette,
+    process_images,
+)
 
 
 class ColorMaskHatchApiTest(unittest.TestCase):
@@ -85,6 +91,53 @@ class ColorMaskHatchApiTest(unittest.TestCase):
 
         self.assertEqual(result["total_area_m2"], 4.0)
         self.assertEqual(result["unique_elements"]["E1"]["total_area_m2"], 4.0)
+
+    def test_parallel_palette_and_gabor_match_sequential_results(self) -> None:
+        hatch_patch = self._patch()
+        image = np.tile(hatch_patch, (4, 4, 1))
+        palette = build_palette(hatch_patch, 48, 25, 255)
+        hatch_definition = build_hatch_definition(hatch_patch, palette, 25, 255)
+
+        sequential_rgb, sequential_mask = mask_by_palette(
+            image,
+            palette,
+            18.0,
+            False,
+            12,
+            255,
+            5,
+            chunk_size=500,
+            workers=1,
+        )
+        parallel_rgb, parallel_mask = mask_by_palette(
+            image,
+            palette,
+            18.0,
+            False,
+            12,
+            255,
+            5,
+            chunk_size=500,
+            workers=4,
+        )
+        np.testing.assert_array_equal(parallel_rgb, sequential_rgb)
+        np.testing.assert_array_equal(parallel_mask, sequential_mask)
+
+        sequential_gabor = gabor_hatch_response(
+            image,
+            sequential_mask,
+            hatch_definition,
+            tile_size=32,
+            workers=1,
+        )
+        parallel_gabor = gabor_hatch_response(
+            image,
+            parallel_mask,
+            hatch_definition,
+            tile_size=32,
+            workers=4,
+        )
+        np.testing.assert_array_equal(parallel_gabor, sequential_gabor)
 
 
 if __name__ == "__main__":

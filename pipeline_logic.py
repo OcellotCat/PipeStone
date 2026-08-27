@@ -29,8 +29,9 @@ from pipestone_semantic import STONE_KEYWORD_RE
 logger = logging.getLogger("pipestone")
 
 APP_NAME = "PipeStone legend hatch finder"
-DEFAULT_DPI = 400
+DEFAULT_DPI = 350
 VALIDATION_DPI = 220
+DEFAULT_OCR_WORKERS = 4
 DEFAULT_OUTPUT_DIR = "output"
 RUN_LOG_FILENAME = "pipeline.log"
 _RUN_FILE_HANDLER_MARKER = "_pipestone_run_file_handler"
@@ -1183,6 +1184,7 @@ def analyze_pdf_legends(
     force_ocr: bool = False,
     tesseract_psm: int = 11,
     tesseract_language: str = DEFAULT_TESSERACT_LANGUAGE,
+    ocr_workers: int = DEFAULT_OCR_WORKERS,
     progress_callback: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Find legend entries in a PDF without hatch search or area calculation."""
@@ -1201,13 +1203,17 @@ def analyze_pdf_legends(
         force_ocr=force_ocr,
         tesseract_psm=tesseract_psm,
         tesseract_language=tesseract_language,
+        ocr_workers=ocr_workers,
     )
     report_progress(progress_callback, "legend", 45, "Распознавание текста и таблиц легенды")
 
     material_lines: list[MaterialLine] = []
     legend_matches: list[LegendPatternMatch] = []
+    named_legend_pages: set[int] = set()
     for index, rendered_page in enumerate(rendered_pages, start=1):
         page = int(rendered_page["page"])
+        if find_legend_title_bboxes(words_by_page.get(page, [])):
+            named_legend_pages.add(page)
         page_lines, page_matches = find_page_legend_matches(
             rendered_page["image"],
             words_by_page.get(page, []),
@@ -1218,7 +1224,10 @@ def analyze_pdf_legends(
         percent = 45 + round(50 * index / max(1, len(rendered_pages)))
         report_progress(progress_callback, "legend", percent, f"Проверена страница {page}")
 
-    legend_matches = select_unique_legend_matches(legend_matches)
+    legend_matches = select_unique_legend_matches(
+        legend_matches,
+        preferred_pages=named_legend_pages,
+    )
     legends = [
         {
             "page": match.page,
@@ -1245,8 +1254,39 @@ def analyze_pdf_legends(
     }
 
 
-def select_unique_legend_matches(matches: list[LegendPatternMatch]) -> list[LegendPatternMatch]:
-    """Keep one representative when the same legend is repeated on many sheets."""
+def select_unique_legend_matches(
+    matches: list[LegendPatternMatch],
+    *,
+    preferred_pages: set[int] | None = None,
+) -> list[LegendPatternMatch]:
+    """Select real legend pages and collapse ambiguous structural fallbacks.
+
+    Exact duplicate sheets with a readable ``Условные обозначения`` heading
+    are retained because a merged PDF can legitimately contain several copies
+    whose areas must be summed.  If OCR produces slightly different table
+    geometry on neighboring sheets, the dominant representative is selected;
+    this rejects false heading matches on ordinary drawing pages.
+    """
+    if preferred_pages:
+        preferred = [match for match in matches if match.page in preferred_pages]
+        if preferred:
+            exact_geometries = {
+                (
+                    tuple(round(value, 3) for value in match.table_bbox),
+                    tuple(round(value, 3) for value in match.pattern_bbox),
+                )
+                for match in preferred
+            }
+            if len(preferred) > 1 and len(exact_geometries) == 1:
+                preferred.sort(key=lambda match: (match.page, normalize_text(match.line_text)))
+                logger.info(
+                    "Exact duplicate legend sheets retained: pages=%s matches=%s",
+                    sorted({match.page for match in preferred}),
+                    len(preferred),
+                )
+                return preferred
+            matches = preferred
+
     matches_by_label: dict[str, list[LegendPatternMatch]] = {}
     for match in matches:
         normalized_label = normalize_text(match.line_text)
@@ -1522,6 +1562,7 @@ def analyze_pdf_file(
     force_ocr: bool = False,
     tesseract_psm: int = 11,
     tesseract_language: str = DEFAULT_TESSERACT_LANGUAGE,
+    ocr_workers: int = DEFAULT_OCR_WORKERS,
     save_rendered_pages: bool = False,
     calculate_area: bool = False,
     precomputed_legend_analysis: dict[str, Any] | None = None,
@@ -1550,12 +1591,8 @@ def analyze_pdf_file(
         for item in precomputed_legend_analysis.get("pattern_matches", []):
             match = legend_match_from_dict(item, scale=scale)
             legend_matches_by_page.setdefault(match.page, []).append(match)
-        unique_matches = select_unique_legend_matches(
-            [match for matches in legend_matches_by_page.values() for match in matches]
-        )
-        legend_matches_by_page = {}
-        for match in unique_matches:
-            legend_matches_by_page.setdefault(match.page, []).append(match)
+        # Legend-only analysis already resolved readable title pages versus
+        # structural fallbacks.  Preserve all of its selected pages here.
         legend_pages = sorted(legend_matches_by_page)
         if not legend_pages:
             raise ValueError("Precomputed legend analysis does not contain pattern matches")
@@ -1578,11 +1615,15 @@ def analyze_pdf_file(
             force_ocr=force_ocr,
             tesseract_psm=tesseract_psm,
             tesseract_language=tesseract_language,
+            ocr_workers=ocr_workers,
         )
         report_progress(progress_callback, "legend", 15, "Распознавание текста и таблиц легенды")
 
+        named_legend_pages: set[int] = set()
         for rendered_page in rendered_pages:
             page = int(rendered_page["page"])
+            if find_legend_title_bboxes(words_by_page.get(page, [])):
+                named_legend_pages.add(page)
             material_lines, matches = find_page_legend_matches(
                 rendered_page["image"],
                 words_by_page.get(page, []),
@@ -1592,7 +1633,8 @@ def analyze_pdf_file(
             if matches:
                 legend_matches_by_page[page] = matches
         unique_matches = select_unique_legend_matches(
-            [match for matches in legend_matches_by_page.values() for match in matches]
+            [match for matches in legend_matches_by_page.values() for match in matches],
+            preferred_pages=named_legend_pages,
         )
         legend_matches_by_page = {}
         for match in unique_matches:
