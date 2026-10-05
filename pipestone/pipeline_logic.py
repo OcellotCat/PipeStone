@@ -16,7 +16,7 @@ from pathlib import Path
 from statistics import median
 from typing import Any, Callable
 
-from pipestone_ocr import (
+from .ocr import (
     DEFAULT_TESSERACT_LANGUAGE,
     OcrWord,
     collect_ocr_words,
@@ -24,7 +24,7 @@ from pipestone_ocr import (
     run_image_ocr,
     words_to_lines,
 )
-from pipestone_semantic import STONE_KEYWORD_RE
+from .semantic import STONE_KEYWORD_RE
 
 logger = logging.getLogger("pipestone")
 
@@ -1453,7 +1453,7 @@ def calculate_hatch_page_areas(
             "warning": "Legend hatch patch was not saved.",
         }
 
-    from color_mask_hatch import process_images
+    from .color_mask_hatch import process_images
 
     cv2 = require_module("cv2", "pip install opencv-python-headless")
     logger.info("Area calculation started: pages=%s pattern=%s", target_pages, pattern_image)

@@ -2,7 +2,7 @@ from pathlib import Path
 import tempfile
 from unittest import TestCase
 
-import pipeline_logic
+from pipestone import pipeline_logic
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

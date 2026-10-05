@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from color_mask_hatch import recognize_external_horizontal_dimension, sum_dimension_chain
+from pipestone.color_mask_hatch import recognize_external_horizontal_dimension, sum_dimension_chain
 
 
 class DimensionChainTest(unittest.TestCase):
@@ -25,7 +25,7 @@ class DimensionChainTest(unittest.TestCase):
         image = np.full((900, 500, 3), 255, dtype=np.uint8)
         bound = {"x": 100, "y": 100, "x1": 200, "y1": 600, "width": 100, "height": 500}
         with patch(
-            "color_mask_hatch._read_dimension_candidates",
+            "pipestone.color_mask_hatch._read_dimension_candidates",
             return_value=["640", "995", "640"],
         ):
             result = recognize_external_horizontal_dimension(

@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from color_mask_hatch import (
+from pipestone.color_mask_hatch import (
     build_hatch_definition,
     build_palette,
     gabor_hatch_response,
@@ -79,8 +79,8 @@ class ColorMaskHatchApiTest(unittest.TestCase):
         analysis = ([], [], [], elements, [], [], [], [], [])
 
         with (
-            patch("color_mask_hatch.analyze_euclidean_bound_buckets", return_value=analysis),
-            patch("color_mask_hatch.formal_merge_buckets_by_size", return_value={}),
+            patch("pipestone.color_mask_hatch.analyze_euclidean_bound_buckets", return_value=analysis),
+            patch("pipestone.color_mask_hatch.formal_merge_buckets_by_size", return_value={}),
         ):
             result = process_images(
                 [image],

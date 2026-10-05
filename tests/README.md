@@ -4,7 +4,7 @@
 
 - `test_pdf_area_regression.py` запускает полный pipeline для PDF: поиск легенды,
   OCR и подсчёт площади;
-- `test_color_mask_hatch_area.py` запускает `color_mask_hatch.py` как отдельный
+- `test_color_mask_hatch_area.py` запускает `pipestone.color_mask_hatch` как отдельный
   CLI-процесс для тестовых JPG.
 
 Для PDF используется допуск ±10%. Расчёт PDF выполняется при 400 DPI и с четырьмя

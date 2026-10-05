@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from pipestone_ocr import OcrWord, collect_ocr_words
+from pipestone.ocr import OcrWord, collect_ocr_words
 
 
 class ParallelOcrTests(TestCase):
@@ -32,8 +32,8 @@ class ParallelOcrTests(TestCase):
             return [OcrWord(page, f"page-{page}", (0.0, 0.0, 1.0, 1.0), 1.0, "test")], None
 
         with (
-            patch("pipestone_ocr.extract_pdf_text_words", return_value={}),
-            patch("pipestone_ocr.run_image_ocr", side_effect=recognize),
+            patch("pipestone.ocr.extract_pdf_text_words", return_value={}),
+            patch("pipestone.ocr.run_image_ocr", side_effect=recognize),
         ):
             result = collect_ocr_words(
                 Path("drawing.pdf"),
@@ -50,8 +50,8 @@ class ParallelOcrTests(TestCase):
     def test_workers_are_capped_by_page_count(self) -> None:
         page = {"page": 1, "image": np.zeros((4, 4, 3), dtype=np.uint8)}
         with (
-            patch("pipestone_ocr.extract_pdf_text_words", return_value={}),
-            patch("pipestone_ocr.run_image_ocr", return_value=([], None)) as recognize,
+            patch("pipestone.ocr.extract_pdf_text_words", return_value={}),
+            patch("pipestone.ocr.run_image_ocr", return_value=([], None)) as recognize,
         ):
             collect_ocr_words(
                 Path("drawing.pdf"),

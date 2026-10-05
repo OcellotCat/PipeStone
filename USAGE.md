@@ -60,7 +60,7 @@
 ```python
 from pathlib import Path
 
-from color_mask_hatch import process_images, read_rgb
+from pipestone.color_mask_hatch import process_images, read_rgb
 
 images = [read_rgb(Path("page_001.png")), read_rgb(Path("page_002.png"))]
 patch = read_rgb(Path("output/runs/<run_id>/pattern_results/page_001_legend_pattern_trimmed.png"))

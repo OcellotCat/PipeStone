@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CLI_PATH = PROJECT_ROOT / "color_mask_hatch.py"
+CLI_MODULE = "pipestone.color_mask_hatch"
 SAMPLE_PATH = PROJECT_ROOT / "tests" / "tests_data" / "hatch.png"
 TOTAL_AREA_RE = re.compile(r"Total area:\s*([0-9]+(?:\.[0-9]+)?)\s*m\^2")
 
@@ -26,7 +26,6 @@ class ColorMaskHatchAreaTest(unittest.TestCase):
         relative_tolerance: float = BASELINE_RELATIVE_TOLERANCE,
     ) -> None:
         target_path = PROJECT_ROOT / "tests" / "tests_data" / image_name
-        self.assertTrue(CLI_PATH.is_file(), f"CLI not found: {CLI_PATH}")
         self.assertTrue(SAMPLE_PATH.is_file(), f"Hatch sample not found: {SAMPLE_PATH}")
         self.assertTrue(target_path.is_file(), f"Target image not found: {target_path}")
 
@@ -34,7 +33,8 @@ class ColorMaskHatchAreaTest(unittest.TestCase):
             output_dir = Path(temporary_directory)
             command = [
                 sys.executable,
-                str(CLI_PATH),
+                "-m",
+                CLI_MODULE,
                 "--sample",
                 str(SAMPLE_PATH),
                 "--target",

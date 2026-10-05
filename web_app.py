@@ -27,7 +27,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, ge
 import psutil
 from pydantic import BaseModel
 
-from pipeline_logic import analyze_pdf_file, analyze_pdf_legends, setup_logging
+from pipestone import analyze_pdf_file, analyze_pdf_legends, setup_logging
 
 
 BASE_DIR = Path(__file__).resolve().parent

@@ -5,7 +5,9 @@ from unittest.mock import patch
 
 import numpy as np
 
-import pipeline_logic
+from pipestone import pipeline_logic
+
+TEST_PDF = Path(__file__).resolve().parent / "pdfs" / "test.pdf"
 
 
 class AnalyzePdfLegendPagesTests(TestCase):
@@ -212,7 +214,7 @@ class AnalyzePdfLegendPagesTests(TestCase):
             patch.object(pipeline_logic, "_legend_pattern_crop", return_value=image[:4, :4]),
             patch.object(pipeline_logic, "recognize_hatch_pattern", side_effect=recognize) as search,
         ):
-            result = pipeline_logic.analyze_pdf_file("test.pdf")
+            result = pipeline_logic.analyze_pdf_file(TEST_PDF)
 
         self.assertEqual(result["legend_pages"], [2])
         self.assertEqual(result["hatch_pages"], [3])
@@ -269,12 +271,12 @@ class AnalyzePdfLegendPagesTests(TestCase):
             patch.object(pipeline_logic, "find_hatch_pages") as hatch_search,
             patch.object(pipeline_logic, "calculate_hatch_page_areas") as area_search,
         ):
-            result = pipeline_logic.analyze_pdf_legends("test.pdf")
+            result = pipeline_logic.analyze_pdf_legends(TEST_PDF)
 
         self.assertEqual(result["legends"][0]["name"], "Гранит")
         self.assertEqual(result["analysis_dpi"], 220)
         self.assertEqual(result["pattern_matches"][0]["line_text"], "Гранит")
-        render_pages.assert_called_once_with(Path("test.pdf"), dpi=220)
+        render_pages.assert_called_once_with(TEST_PDF, dpi=220)
         hatch_search.assert_not_called()
         area_search.assert_not_called()
 
@@ -320,12 +322,12 @@ class AnalyzePdfLegendPagesTests(TestCase):
             patch.object(pipeline_logic, "find_hatch_pages", return_value=([], [])),
         ):
             result = pipeline_logic.analyze_pdf_file(
-                "test.pdf",
+                TEST_PDF,
                 dpi=400,
                 precomputed_legend_analysis=precomputed,
             )
 
-        render.assert_called_once_with(Path("test.pdf"), dpi=400, page_numbers=[2])
+        render.assert_called_once_with(TEST_PDF, dpi=400, page_numbers=[2])
         collect_ocr.assert_not_called()
         find_legend.assert_not_called()
         scaled_match = save.call_args.args[1]
@@ -343,7 +345,7 @@ class AnalyzePdfLegendPagesTests(TestCase):
             patch.object(pipeline_logic, "find_page_legend_matches", return_value=([], [])),
             patch.object(pipeline_logic, "recognize_hatch_pattern") as search,
         ):
-            result = pipeline_logic.analyze_pdf_file("test.pdf")
+            result = pipeline_logic.analyze_pdf_file(TEST_PDF)
 
         self.assertEqual(result["legend_pages"], [])
         self.assertEqual(result["hatch_pages"], [])
@@ -365,7 +367,7 @@ class AnalyzePdfLegendPagesTests(TestCase):
             with (
                 patch.object(pipeline_logic, "load_image_rgb", return_value=pattern_image),
                 patch.object(pipeline_logic, "require_module", return_value=object()),
-                patch("color_mask_hatch.process_images", return_value=processed) as process,
+                patch("pipestone.color_mask_hatch.process_images", return_value=processed) as process,
             ):
                 result = pipeline_logic.calculate_hatch_page_areas(
                     images,

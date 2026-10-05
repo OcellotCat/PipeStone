@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PipeStone - facade layout PDF analyzer. Entry point wrapper."""
 
-from pipeline_logic import (
+from pipestone import (
     APP_NAME,
     DEFAULT_DPI,
     DEFAULT_OCR_WORKERS,
@@ -9,8 +9,8 @@ from pipeline_logic import (
     analyze_image_file,
     analyze_pdf_file,
     setup_logging,
+    DEFAULT_TESSERACT_LANGUAGE,
 )
-from pipestone_ocr import DEFAULT_TESSERACT_LANGUAGE
 
 # Re-export for backward compatibility
 __all__ = [
@@ -21,6 +21,7 @@ __all__ = [
     "DEFAULT_DPI",
     "DEFAULT_OCR_WORKERS",
     "DEFAULT_OUTPUT_DIR",
+    "DEFAULT_TESSERACT_LANGUAGE",
 ]
 
 if __name__ == "__main__":
